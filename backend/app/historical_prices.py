@@ -59,6 +59,18 @@ def daily_close_series(ticker: str, start_date: str, end_date: str) -> list[tupl
     return series
 
 
+def validate_yahoo_ticker(ticker: str) -> MarketQuote:
+    normalized = ticker.strip().upper()
+    if not normalized:
+        raise ValueError("empty ticker")
+    if not all(ch.isalnum() or ch in {".", "-"} for ch in normalized):
+        raise ValueError("ticker contains unsupported characters")
+    quote = _yahoo_previous_close(normalized)
+    if quote.price <= 0:
+        raise ValueError("ticker has no valid price")
+    return quote
+
+
 def _yahoo_previous_close(ticker: str) -> MarketQuote:
     yahoo_symbol = _yahoo_symbol(ticker)
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}?range=5d&interval=1d"

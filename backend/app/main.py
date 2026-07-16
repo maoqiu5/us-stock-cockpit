@@ -5,8 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .broker import USmartBrokerAdapter, broker_capabilities, broker_from_env, execution_config
 from .data_sources import data_source_statuses, market_quotes
-from .historical_prices import previous_close_quotes
-from .models import AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DisciplineEvent, Holding, HoldingAdvice, ManualExecutionRequest, ModelValidationItem, OrderRequest, PortfolioOptimization, PreviousCloseImportResult, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult
+from .historical_prices import previous_close_quotes, validate_yahoo_ticker
+from .models import AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DisciplineEvent, Holding, HoldingAdvice, ManualExecutionRequest, ModelValidationItem, OrderRequest, PortfolioOptimization, PreviousCloseImportResult, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, ValidateTickerResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult
 from .risk import RiskConfig, RiskEngine
 from .seed import EVENTS, HOLDINGS, ORDERS, STRATEGIES, WATCHLIST
 from .strategy import generate_signal, run_backtest
@@ -105,12 +105,14 @@ def add_watchlist_item(request: AddWatchlistRequest) -> WatchlistItem:
     existing = next((item for item in WATCHLIST if item.ticker == ticker), None)
     if existing:
         return existing
-    quote, *_ = previous_close_quotes([ticker])
-    pct_change = quote[0].pct_change if quote else 0
+    validation = validate_ticker(ticker)
+    if not validation.valid:
+        raise HTTPException(status_code=400, detail=validation.reason)
+    pct_change = 0
     trend = "上行" if pct_change > 1 else ("下行" if pct_change < -1 else "横盘")
     item = WatchlistItem(
         ticker=ticker,
-        name=request.name or f"{ticker} · 手工加入",
+        name=request.name or validation.name or f"{ticker} · 手工加入",
         sector=request.sector or "User Added",
         pe=30.0,
         peg=1.8,
@@ -122,6 +124,38 @@ def add_watchlist_item(request: AddWatchlistRequest) -> WatchlistItem:
     )
     WATCHLIST.append(item)
     return item
+
+
+@app.get("/watchlist/validate")
+def validate_ticker(ticker: str = Query(default="")) -> ValidateTickerResult:
+    normalized = ticker.strip().upper()
+    if not normalized:
+        return ValidateTickerResult(ticker="", valid=False, reason="请输入股票代码。")
+    try:
+        quote = validate_yahoo_ticker(normalized)
+    except Exception as exc:
+        return ValidateTickerResult(ticker=normalized, valid=False, reason=f"未能识别 {normalized}，请检查代码或交易所后缀。")
+    return ValidateTickerResult(
+        ticker=normalized,
+        valid=True,
+        name=quote.name if quote.name and quote.name != normalized else f"{normalized} · Yahoo 已识别",
+        price=quote.price,
+        source=quote.source,
+        reason="已通过 Yahoo 日线校验，可加入股票池。",
+    )
+
+
+@app.delete("/watchlist/{ticker}")
+def delete_watchlist_item(ticker: str) -> dict[str, str]:
+    normalized = ticker.strip().upper()
+    holding_tickers = {holding.ticker for holding in HOLDINGS}
+    if normalized in holding_tickers:
+        raise HTTPException(status_code=400, detail="当前持仓股票不能从股票池删除，请先在持仓纪律里处理。")
+    before = len(WATCHLIST)
+    WATCHLIST[:] = [item for item in WATCHLIST if item.ticker != normalized]
+    if len(WATCHLIST) == before:
+        raise HTTPException(status_code=404, detail="ticker not found")
+    return {"deleted": normalized}
 
 
 @app.get("/market/quotes")

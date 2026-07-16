@@ -116,16 +116,27 @@ def test_previous_close_import_updates_holdings(monkeypatch):
 def test_watchlist_add_and_advice_endpoints(monkeypatch):
     monkeypatch.setattr(
         main_module,
-        "previous_close_quotes",
-        lambda tickers: ([MarketQuote(ticker=tickers[0], name=tickers[0], price=100, change=1, pct_change=1, volume=0, source="test", delay_seconds=0, updated_at="07/15 16:00")], []),
+        "validate_yahoo_ticker",
+        lambda ticker: MarketQuote(ticker=ticker, name=f"{ticker} Test", price=100, change=1, pct_change=1, volume=0, source="test", delay_seconds=0, updated_at="07/15 16:00"),
     )
     added = main_module.add_watchlist_item(AddWatchlistRequest(ticker="QQQ"))
     assert added.ticker == "QQQ"
+    assert main_module.validate_ticker("QQQ").valid
+    assert main_module.delete_watchlist_item("QQQ") == {"deleted": "QQQ"}
     assert main_module.holding_advice()
     assert main_module.screening_candidates()
     allocation = main_module.portfolio_optimization()
     assert allocation.suggestions
     assert allocation.cash_target > 0
+
+
+def test_watchlist_delete_blocks_current_holding():
+    try:
+        main_module.delete_watchlist_item("NOK.US")
+    except Exception as exc:
+        assert "持仓" in str(exc.detail)
+    else:
+        raise AssertionError("current holding should not be deletable")
 
 
 def test_model_validation_returns_all_strategies(monkeypatch):

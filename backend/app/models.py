@@ -208,6 +208,15 @@ class AddWatchlistRequest(BaseModel):
     sector: str = "User Added"
 
 
+class ValidateTickerResult(BaseModel):
+    ticker: str
+    valid: bool
+    name: str = ""
+    price: float = 0
+    source: str = ""
+    reason: str = ""
+
+
 class HoldingAdvice(BaseModel):
     ticker: str
     broker: str

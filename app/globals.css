@@ -698,10 +698,45 @@ td span {
 
 .add-stock-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 160px;
+  grid-template-columns: minmax(220px, 1fr) 116px 160px;
   gap: 10px;
   margin-bottom: 14px;
   align-items: end;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.validation-box {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -2px 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(7, 14, 22, 0.74);
+}
+
+.validation-box.valid {
+  border-color: rgba(24, 210, 176, 0.32);
+  background: rgba(24, 210, 176, 0.08);
+}
+
+.validation-box.invalid {
+  border-color: rgba(255, 95, 148, 0.3);
+  background: rgba(255, 95, 148, 0.1);
+}
+
+.validation-box strong {
+  color: var(--green);
+}
+
+.validation-box span {
+  color: #c3ced9;
+  font-size: 13px;
 }
 
 .advice-grid {

@@ -234,6 +234,15 @@ type ModelValidationItem = {
   tuning_note: string;
 };
 
+type ValidateTickerResult = {
+  ticker: string;
+  valid: boolean;
+  name: string;
+  price: number;
+  source: string;
+  reason: string;
+};
+
 type BacktestResult = {
   strategy_id: string;
   ticker: string;
@@ -331,6 +340,7 @@ export default function Home() {
     allocation: null
   });
   const [newTicker, setNewTicker] = useState("");
+  const [tickerValidation, setTickerValidation] = useState<ValidateTickerResult | null>(null);
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
   const [validation, setValidation] = useState<ModelValidationItem[]>([]);
   const [selectedStrategy, setSelectedStrategy] = useState("pe_v1");
@@ -493,13 +503,33 @@ export default function Home() {
   async function addStockToWatchlist(ticker: string) {
     const normalized = ticker.trim().toUpperCase();
     if (!normalized) return;
+    const validation = tickerValidation?.ticker === normalized ? tickerValidation : await validateTicker(normalized);
+    if (!validation.valid) {
+      setNotice(validation.reason);
+      return;
+    }
     await fetchJson<WatchlistItem>("/watchlist", {
       method: "POST",
-      body: JSON.stringify({ ticker: normalized })
+      body: JSON.stringify({ ticker: normalized, name: validation.name })
     });
     setNewTicker("");
+    setTickerValidation(null);
     await load();
     setNotice(`${normalized} 已加入股票池，系统会纳入行情、候选跟踪和模型评测。`);
+  }
+
+  async function validateTicker(ticker = newTicker) {
+    const normalized = ticker.trim().toUpperCase();
+    const result = await fetchJson<ValidateTickerResult>(`/watchlist/validate?ticker=${encodeURIComponent(normalized)}`);
+    setTickerValidation(result);
+    setNotice(result.reason);
+    return result;
+  }
+
+  async function deleteWatchlistTicker(ticker: string) {
+    await fetchJson(`/watchlist/${encodeURIComponent(ticker)}`, { method: "DELETE" });
+    await load();
+    setNotice(`${ticker} 已从股票池删除。`);
   }
 
   async function validateModels() {
@@ -576,13 +606,18 @@ export default function Home() {
           <Watchlist
             items={data.watchlist}
             quotes={data.quotes}
+            holdings={data.holdings}
             holdingAdvice={data.holdingAdvice}
             candidates={data.candidates}
             allocation={data.allocation}
             validation={validation}
             newTicker={newTicker}
+            tickerValidation={tickerValidation}
             setNewTicker={setNewTicker}
+            setTickerValidation={setTickerValidation}
+            validateTicker={validateTicker}
             addStockToWatchlist={addStockToWatchlist}
+            deleteWatchlistTicker={deleteWatchlistTicker}
             load={load}
             importPreviousClose={importPreviousClose}
             validateModels={validateModels}
@@ -814,31 +849,42 @@ function Strategies({ strategies }: { strategies: StrategyModel[] }) {
 function Watchlist({
   items,
   quotes,
+  holdings,
   holdingAdvice,
   candidates,
   allocation,
   validation,
   newTicker,
+  tickerValidation,
   setNewTicker,
+  setTickerValidation,
+  validateTicker,
   addStockToWatchlist,
+  deleteWatchlistTicker,
   load,
   importPreviousClose,
   validateModels
 }: {
   items: WatchlistItem[];
   quotes: MarketQuote[];
+  holdings: Holding[];
   holdingAdvice: HoldingAdvice[];
   candidates: CandidateStock[];
   allocation: PortfolioOptimization | null;
   validation: ModelValidationItem[];
   newTicker: string;
+  tickerValidation: ValidateTickerResult | null;
   setNewTicker: (value: string) => void;
+  setTickerValidation: (value: ValidateTickerResult | null) => void;
+  validateTicker: (ticker?: string) => Promise<ValidateTickerResult>;
   addStockToWatchlist: (ticker: string) => Promise<void>;
+  deleteWatchlistTicker: (ticker: string) => Promise<void>;
   load: () => Promise<void>;
   importPreviousClose: () => Promise<PreviousCloseImportResult>;
   validateModels: () => Promise<void>;
 }) {
   const quoteMap = new Map(quotes.map((quote) => [quote.ticker, quote]));
+  const holdingTickers = new Set(holdings.map((holding) => holding.ticker));
   return (
     <div className="page-grid">
       <section className="panel full">
@@ -855,13 +901,28 @@ function Watchlist({
         </div>
         <div className="add-stock-row">
           <label>新增监控股票
-            <input value={newTicker} onChange={(event) => setNewTicker(event.target.value)} placeholder="例如 MSFT / GOOGL / QQQ" />
+            <input
+              value={newTicker}
+              onChange={(event) => {
+                setNewTicker(event.target.value.toUpperCase());
+                setTickerValidation(null);
+              }}
+              placeholder="例如 MSFT / GOOGL / QQQ"
+            />
           </label>
-          <button className="primary" onClick={() => addStockToWatchlist(newTicker)}>加入股票池</button>
+          <button onClick={() => validateTicker(newTicker)}>校验代码</button>
+          <button className="primary" disabled={!tickerValidation?.valid || tickerValidation.ticker !== newTicker.trim().toUpperCase()} onClick={() => addStockToWatchlist(newTicker)}>加入股票池</button>
         </div>
+        {tickerValidation && (
+          <div className={`validation-box ${tickerValidation.valid ? "valid" : "invalid"}`}>
+            <strong>{tickerValidation.ticker || "未输入"}</strong>
+            <span>{tickerValidation.reason}</span>
+            {tickerValidation.valid && <em>{tickerValidation.name} · {fmtMoney(tickerValidation.price)} · {tickerValidation.source}</em>}
+          </div>
+        )}
         <table>
           <thead>
-            <tr><th>股票</th><th>现价</th><th>涨跌</th><th>PE</th><th>PEG</th><th>ROI</th><th>增长</th><th>趋势</th><th>资格</th><th>信号</th></tr>
+            <tr><th>股票</th><th>现价</th><th>涨跌</th><th>PE</th><th>PEG</th><th>ROI</th><th>增长</th><th>趋势</th><th>资格</th><th>信号</th><th>操作</th></tr>
           </thead>
           <tbody>
             {items.map((item) => {
@@ -878,6 +939,13 @@ function Watchlist({
                   <td>{item.trend}</td>
                   <td>{item.eligible ? "可交易" : "观察"}</td>
                   <td><em>{item.signal}</em></td>
+                  <td>
+                    {holdingTickers.has(item.ticker) ? (
+                      <span>持仓中</span>
+                    ) : (
+                      <button onClick={() => deleteWatchlistTicker(item.ticker)}>删除</button>
+                    )}
+                  </td>
                 </tr>
               );
             })}
