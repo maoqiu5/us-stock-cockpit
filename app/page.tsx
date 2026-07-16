@@ -123,6 +123,39 @@ type PreparedOrder = {
   blockers: string[];
 };
 
+type MarketQuote = {
+  ticker: string;
+  name: string;
+  price: number;
+  change: number;
+  pct_change: number;
+  volume: number;
+  source: string;
+  delay_seconds: number;
+  updated_at: string;
+};
+
+type DataSourceStatus = {
+  id: string;
+  name: string;
+  purpose: string;
+  configured: boolean;
+  status: "active" | "fallback" | "missing" | "manual";
+  detail: string;
+};
+
+type Holding = {
+  broker: "za-bank" | "usmart" | "ibkr" | "manual";
+  ticker: string;
+  qty: number;
+  avg_cost: number;
+  market_price: number;
+  market_value: number;
+  pnl: number;
+  currency: string;
+  updated_at: string;
+};
+
 type BacktestResult = {
   strategy_id: string;
   ticker: string;
@@ -145,6 +178,9 @@ type AppData = {
   risk: RiskStatus | null;
   brokers: BrokerCapability[];
   execution: ExecutionConfig | null;
+  quotes: MarketQuote[];
+  sources: DataSourceStatus[];
+  holdings: Holding[];
 };
 
 const nav = [
@@ -180,7 +216,10 @@ export default function Home() {
     orders: [],
     risk: null,
     brokers: [],
-    execution: null
+    execution: null,
+    quotes: [],
+    sources: [],
+    holdings: []
   });
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
   const [selectedStrategy, setSelectedStrategy] = useState("pe_v1");
@@ -191,7 +230,7 @@ export default function Home() {
   const [notice, setNotice] = useState("");
 
   const load = async () => {
-    const [summary, strategies, watchlist, events, orders, risk, brokers, execution] = await Promise.all([
+    const [summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings] = await Promise.all([
       fetchJson<DashboardSummary>("/dashboard/summary"),
       fetchJson<StrategyModel[]>("/strategies"),
       fetchJson<WatchlistItem[]>("/watchlist"),
@@ -199,9 +238,12 @@ export default function Home() {
       fetchJson<Order[]>("/orders"),
       fetchJson<RiskStatus>("/risk/status"),
       fetchJson<BrokerCapability[]>("/brokers/capabilities"),
-      fetchJson<ExecutionConfig>("/execution/config")
+      fetchJson<ExecutionConfig>("/execution/config"),
+      fetchJson<MarketQuote[]>("/market/quotes"),
+      fetchJson<DataSourceStatus[]>("/data-sources/status"),
+      fetchJson<Holding[]>("/portfolio/holdings")
     ]);
-    setData({ summary, strategies, watchlist, events, orders, risk, brokers, execution });
+    setData({ summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings });
     setLoading(false);
   };
 
@@ -273,6 +315,38 @@ export default function Home() {
     setNotice("已记录一笔 ZA Bank 手工成交。");
   }
 
+  async function importSampleBrokerRecord() {
+    await fetchJson("/imports/broker-records", {
+      method: "POST",
+      body: JSON.stringify({
+        broker: "usmart",
+        records: [
+          {
+            broker: "usmart",
+            record_type: "holding",
+            ticker: "NVDA",
+            qty: 3,
+            price: 164.8,
+            executed_at: "07/06 15:20",
+            note: "uSMART 持仓页手工导入"
+          },
+          {
+            broker: "usmart",
+            record_type: "trade",
+            ticker: "NVDA",
+            side: "BUY",
+            qty: 3,
+            price: 164.8,
+            executed_at: "07/06 15:20",
+            note: "uSMART 成交记录导入"
+          }
+        ]
+      })
+    });
+    await load();
+    setNotice("已导入一组 uSMART 样例持仓和成交记录。");
+  }
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -330,13 +404,22 @@ export default function Home() {
             orders={data.orders}
             brokers={data.brokers}
             execution={data.execution}
+            sources={data.sources}
             preparedOrder={preparedOrder}
             previewUsmartOrder={previewUsmartOrder}
           />
         )}
         {active === "strategies" && <Strategies strategies={data.strategies} />}
-        {active === "watchlist" && <Watchlist items={data.watchlist} />}
-        {active === "discipline" && <Discipline events={data.events} orders={data.orders} recordZaManualExecution={recordZaManualExecution} />}
+        {active === "watchlist" && <Watchlist items={data.watchlist} quotes={data.quotes} load={load} />}
+        {active === "discipline" && (
+          <Discipline
+            events={data.events}
+            orders={data.orders}
+            holdings={data.holdings}
+            recordZaManualExecution={recordZaManualExecution}
+            importSampleBrokerRecord={importSampleBrokerRecord}
+          />
+        )}
         {active === "analysis" && (
           <Analysis
             strategies={data.strategies}
@@ -374,6 +457,7 @@ function Dashboard({
   orders,
   brokers,
   execution,
+  sources,
   preparedOrder,
   previewUsmartOrder
 }: {
@@ -382,6 +466,7 @@ function Dashboard({
   orders: Order[];
   brokers: BrokerCapability[];
   execution: ExecutionConfig | null;
+  sources: DataSourceStatus[];
   preparedOrder: PreparedOrder | null;
   previewUsmartOrder: () => Promise<void>;
 }) {
@@ -463,6 +548,26 @@ function Dashboard({
       <section className="panel wide">
         <div className="panel-head">
           <div>
+            <h2>数据源状态</h2>
+            <p>主路径切换为 AKShare 行情、TuShare 基本面、ZA/uSMART 导入对账；券商 API 下单降为未来可选。</p>
+          </div>
+          <span className="badge">导入对账优先</span>
+        </div>
+        <div className="source-grid">
+          {sources.map((source) => (
+            <article key={source.id} className={`source-card ${source.status}`}>
+              <strong>{source.name}</strong>
+              <span>{source.status}</span>
+              <p>{source.purpose}</p>
+              <small>{source.detail}</small>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel wide">
+        <div className="panel-head">
+          <div>
             <h2>券商接入路径</h2>
             <p>按你现有账户优先：香港盈立负责自动化交易，ZA Bank 先做手工确认，IBKR 作为备用执行通道。</p>
           </div>
@@ -527,47 +632,78 @@ function Strategies({ strategies }: { strategies: StrategyModel[] }) {
   );
 }
 
-function Watchlist({ items }: { items: WatchlistItem[] }) {
+function Watchlist({ items, quotes, load }: { items: WatchlistItem[]; quotes: MarketQuote[]; load: () => Promise<void> }) {
+  const quoteMap = new Map(quotes.map((quote) => [quote.ticker, quote]));
   return (
+    <div className="page-grid">
     <section className="panel full">
       <div className="panel-head">
         <div>
           <h2>MAG7 股票池</h2>
           <p>估值、盈利质量、增长和趋势同时满足纪律要求，才允许进入自动信号队列。</p>
         </div>
-        <button>同步基本面</button>
+        <button onClick={load}>刷新行情</button>
       </div>
       <table>
         <thead>
-          <tr><th>股票</th><th>PE</th><th>PEG</th><th>ROI</th><th>增长</th><th>趋势</th><th>资格</th><th>信号</th></tr>
+          <tr><th>股票</th><th>现价</th><th>涨跌</th><th>PE</th><th>PEG</th><th>ROI</th><th>增长</th><th>趋势</th><th>资格</th><th>信号</th></tr>
         </thead>
         <tbody>
-          {items.map((item) => (
-            <tr key={item.ticker}>
-              <td><b>{item.ticker}</b><span>{item.name}</span></td>
-              <td>{item.pe}</td>
-              <td>{item.peg}</td>
-              <td>{pct(item.roi)}</td>
-              <td>{pct(item.growth)}</td>
-              <td>{item.trend}</td>
-              <td>{item.eligible ? "可交易" : "观察"}</td>
-              <td><em>{item.signal}</em></td>
-            </tr>
-          ))}
+          {items.map((item) => {
+            const quote = quoteMap.get(item.ticker);
+            return (
+              <tr key={item.ticker}>
+                <td><b>{item.ticker}</b><span>{item.name}</span></td>
+                <td>{quote ? fmtMoney(quote.price) : "-"}</td>
+                <td className={quote && quote.pct_change < 0 ? "negative" : "positive"}>{quote ? pct(quote.pct_change) : "-"}</td>
+                <td>{item.pe}</td>
+                <td>{item.peg}</td>
+                <td>{pct(item.roi)}</td>
+                <td>{pct(item.growth)}</td>
+                <td>{item.trend}</td>
+                <td>{item.eligible ? "可交易" : "观察"}</td>
+                <td><em>{item.signal}</em></td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </section>
+    <section className="panel wide">
+      <div className="panel-head">
+        <div>
+          <h2>行情缓存</h2>
+          <p>AKShare 可用时读取公开美股报价；不可用时回退到样例缓存，保证策略和 UI 可持续运行。</p>
+        </div>
+        <span className="badge">{quotes[0]?.source || "sample-fallback"}</span>
+      </div>
+      <div className="quote-grid">
+        {quotes.map((quote) => (
+          <article key={quote.ticker}>
+            <strong>{quote.ticker}</strong>
+            <b>{fmtMoney(quote.price)}</b>
+            <span className={quote.pct_change < 0 ? "negative" : "positive"}>{pct(quote.pct_change)}</span>
+            <small>{quote.source} · {quote.updated_at}</small>
+          </article>
+        ))}
+      </div>
+    </section>
+    </div>
   );
 }
 
 function Discipline({
   events,
   orders,
-  recordZaManualExecution
+  holdings,
+  recordZaManualExecution,
+  importSampleBrokerRecord
 }: {
   events: DisciplineEvent[];
   orders: Order[];
+  holdings: Holding[];
   recordZaManualExecution: () => Promise<void>;
+  importSampleBrokerRecord: () => Promise<void>;
 }) {
   return (
     <div className="page-grid">
@@ -609,6 +745,34 @@ function Discipline({
             </div>
           ))}
         </div>
+      </section>
+      <section className="panel wide">
+        <div className="panel-head">
+          <div>
+            <h2>券商持仓对账</h2>
+            <p>ZA Bank 和 uSMART 当前走结单、截图、CSV 或手工记录导入，系统统一生成本地持仓和 PnL。</p>
+          </div>
+          <button onClick={importSampleBrokerRecord}>导入样例记录</button>
+        </div>
+        <table>
+          <thead>
+            <tr><th>券商</th><th>股票</th><th>数量</th><th>成本</th><th>现价</th><th>市值</th><th>盈亏</th><th>更新时间</th></tr>
+          </thead>
+          <tbody>
+            {holdings.map((holding) => (
+              <tr key={`${holding.broker}-${holding.ticker}`}>
+                <td>{holding.broker}</td>
+                <td><b>{holding.ticker}</b></td>
+                <td>{holding.qty}</td>
+                <td>{fmtMoney(holding.avg_cost)}</td>
+                <td>{fmtMoney(holding.market_price)}</td>
+                <td>{fmtMoney(holding.market_value)}</td>
+                <td className={holding.pnl < 0 ? "negative" : "positive"}>{fmtMoney(holding.pnl)}</td>
+                <td>{holding.updated_at}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </section>
     </div>
   );

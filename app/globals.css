@@ -469,6 +469,81 @@ h2 {
   line-height: 1.7;
 }
 
+.source-grid,
+.quote-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.source-card,
+.quote-grid article {
+  min-height: 126px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(7, 14, 22, 0.74);
+}
+
+.source-card.active {
+  border-color: rgba(24, 210, 176, 0.34);
+  background: rgba(24, 210, 176, 0.08);
+}
+
+.source-card.fallback,
+.source-card.missing {
+  border-color: rgba(245, 195, 87, 0.28);
+  background: rgba(245, 195, 87, 0.08);
+}
+
+.source-card.manual {
+  border-color: rgba(124, 184, 255, 0.28);
+  background: rgba(124, 184, 255, 0.08);
+}
+
+.source-card strong,
+.quote-grid strong,
+.quote-grid b,
+.source-card span,
+.quote-grid span,
+.source-card small,
+.quote-grid small {
+  display: block;
+}
+
+.source-card span {
+  margin-top: 8px;
+  color: var(--green);
+  font-size: 12px;
+}
+
+.source-card p {
+  margin: 10px 0;
+  color: #c3ced9;
+  font-size: 13px;
+}
+
+.source-card small,
+.quote-grid small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.quote-grid b {
+  margin-top: 10px;
+  color: #eef7f5;
+  font-size: 22px;
+}
+
+.positive {
+  color: var(--green);
+}
+
+.negative {
+  color: var(--red);
+}
+
 .execution-panel {
   display: grid;
   grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
@@ -703,6 +778,7 @@ select, input {
   .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .analysis-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .broker-grid { grid-template-columns: 1fr; }
+  .source-grid, .quote-grid { grid-template-columns: 1fr; }
   .execution-panel { grid-template-columns: 1fr; }
 }
 

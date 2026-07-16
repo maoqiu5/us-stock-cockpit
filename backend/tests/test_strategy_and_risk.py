@@ -1,5 +1,8 @@
 from backend.app.models import OrderRequest, Side
 from backend.app.broker import USmartBrokerAdapter
+from backend.app.data_sources import market_quotes
+from backend.app.main import import_broker_records
+from backend.app.models import BrokerImportRecord, BrokerImportRequest
 from backend.app.risk import RiskConfig, RiskEngine
 from backend.app.seed import WATCHLIST
 from backend.app.strategy import generate_signal, run_backtest, score_watchlist_item
@@ -51,3 +54,39 @@ def test_usmart_prepare_order_blocks_without_credentials():
     assert prepared.body["exchangeType"] == 5
     assert prepared.body["entrustType"] == 0
     assert "CHANNEL_MISSING" in prepared.blockers
+
+
+def test_market_quotes_fallback_returns_requested_symbol():
+    quotes = market_quotes(["META"])
+    assert quotes[0].ticker == "META"
+    assert quotes[0].price > 0
+
+
+def test_import_broker_records_updates_holdings_and_trades():
+    result = import_broker_records(
+        BrokerImportRequest(
+            broker="usmart",
+            records=[
+                BrokerImportRecord(
+                    broker="usmart",
+                    record_type="holding",
+                    ticker="AAPL",
+                    qty=2,
+                    price=213.4,
+                    executed_at="07/06 15:30",
+                ),
+                BrokerImportRecord(
+                    broker="usmart",
+                    record_type="trade",
+                    ticker="AAPL",
+                    side=Side.buy,
+                    qty=2,
+                    price=213.4,
+                    executed_at="07/06 15:31",
+                ),
+            ],
+        )
+    )
+    assert result.imported == 2
+    assert result.holdings_updated == 1
+    assert result.trades_recorded == 1

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal, Union
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -54,6 +54,62 @@ class TradeOrder(BaseModel):
     limit_price: float
     status: str
     created_at: str
+
+
+class MarketQuote(BaseModel):
+    ticker: str
+    name: str = ""
+    price: float
+    change: float
+    pct_change: float
+    volume: float = 0
+    source: str
+    delay_seconds: int
+    updated_at: str
+
+
+class DataSourceStatus(BaseModel):
+    id: str
+    name: str
+    purpose: str
+    configured: bool
+    status: Literal["active", "fallback", "missing", "manual"]
+    detail: str
+
+
+class Holding(BaseModel):
+    broker: Literal["za-bank", "usmart", "ibkr", "manual"]
+    ticker: str
+    qty: float
+    avg_cost: float
+    market_price: float
+    market_value: float
+    pnl: float
+    currency: str = "USD"
+    updated_at: str
+
+
+class BrokerImportRecord(BaseModel):
+    broker: Literal["za-bank", "usmart", "ibkr", "manual"]
+    record_type: Literal["holding", "trade"]
+    ticker: str
+    side: Optional[Side] = None
+    qty: float
+    price: float
+    executed_at: str
+    note: str = ""
+
+
+class BrokerImportRequest(BaseModel):
+    broker: Literal["za-bank", "usmart", "ibkr", "manual"]
+    records: list[BrokerImportRecord]
+
+
+class BrokerImportResult(BaseModel):
+    imported: int
+    holdings_updated: int
+    trades_recorded: int
+    message: str
 
 
 class PreparedBrokerRequest(BaseModel):

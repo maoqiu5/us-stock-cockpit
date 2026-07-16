@@ -4,9 +4,10 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from .broker import USmartBrokerAdapter, broker_capabilities, broker_from_env, execution_config
-from .models import BacktestRequest, ManualExecutionRequest, OrderRequest, Signal, TradeOrder
+from .data_sources import data_source_statuses, market_quotes
+from .models import BacktestRequest, BrokerImportRequest, BrokerImportResult, Holding, ManualExecutionRequest, OrderRequest, Signal, TradeOrder
 from .risk import RiskConfig, RiskEngine
-from .seed import EVENTS, ORDERS, STRATEGIES, WATCHLIST
+from .seed import EVENTS, HOLDINGS, ORDERS, STRATEGIES, WATCHLIST
 from .strategy import generate_signal, run_backtest
 
 app = FastAPI(title="美股驾驶舱 API", version="0.1.0")
@@ -77,6 +78,22 @@ def backtest(strategy_id: str, request: BacktestRequest):
 @app.get("/watchlist")
 def watchlist():
     return WATCHLIST
+
+
+@app.get("/market/quotes")
+def quotes(symbols: str = Query(default="")):
+    requested = [symbol.strip().upper() for symbol in symbols.split(",") if symbol.strip()]
+    return market_quotes(requested or [item.ticker for item in WATCHLIST])
+
+
+@app.get("/data-sources/status")
+def source_statuses():
+    return data_source_statuses()
+
+
+@app.get("/portfolio/holdings")
+def holdings() -> list[Holding]:
+    return HOLDINGS
 
 
 @app.get("/signals")
@@ -155,6 +172,59 @@ def create_manual_execution(request: ManualExecutionRequest) -> TradeOrder:
     )
     ORDERS.insert(0, order)
     return order
+
+
+@app.post("/imports/broker-records")
+def import_broker_records(request: BrokerImportRequest) -> BrokerImportResult:
+    holdings_updated = 0
+    trades_recorded = 0
+    for record in request.records:
+        if record.record_type == "holding":
+            existing = next((item for item in HOLDINGS if item.broker == record.broker and item.ticker == record.ticker), None)
+            market_value = record.qty * record.price
+            if existing:
+                existing.qty = record.qty
+                existing.avg_cost = record.price
+                existing.market_price = record.price
+                existing.market_value = market_value
+                existing.pnl = 0
+                existing.updated_at = record.executed_at
+            else:
+                HOLDINGS.append(
+                    Holding(
+                        broker=record.broker if record.broker in {"za-bank", "usmart", "ibkr"} else "manual",
+                        ticker=record.ticker,
+                        qty=record.qty,
+                        avg_cost=record.price,
+                        market_price=record.price,
+                        market_value=market_value,
+                        pnl=0,
+                        updated_at=record.executed_at,
+                    )
+                )
+            holdings_updated += 1
+        else:
+            ORDERS.insert(
+                0,
+                TradeOrder(
+                    id=f"import_{record.broker}_{len(ORDERS) + 1}",
+                    broker=record.broker,
+                    ticker=record.ticker,
+                    side=record.side or "BUY",
+                    qty=int(record.qty),
+                    order_type="IMPORT",
+                    limit_price=record.price,
+                    status=f"IMPORTED: {record.note or 'broker record'}",
+                    created_at=record.executed_at,
+                ),
+            )
+            trades_recorded += 1
+    return BrokerImportResult(
+        imported=len(request.records),
+        holdings_updated=holdings_updated,
+        trades_recorded=trades_recorded,
+        message="导入完成，已更新本地持仓和交易记录。",
+    )
 
 
 @app.get("/risk/status")

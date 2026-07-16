@@ -11,6 +11,7 @@
 - 实盘保护：任何 live 模式必须显式设置 `ENABLE_LIVE_TRADING=true`，订单仍会先经过风控。
 - uSMART 请求预演：`POST /orders/preview` 会生成官方字段、请求头、签名状态和阻断原因。
 - ZA Bank 手工执行记录：`POST /manual-executions` 用于把 ZA App 内确认的成交写回纪律日志。
+- 当前主路径：AKShare 实时/准实时行情、TuShare 基本面、ZA/uSMART 结单或截图导入对账。
 
 ## 本地启动
 
@@ -39,6 +40,33 @@ npm run dev
 1. **香港盈立/uSMART：优先实盘路径。** 官方 Open API 支持行情、账户和交易接口，美股交易类别为 `exchangeType=5`，限价单 `entrustProp=0`，市价单 `entrustProp=w`。
 2. **ZA Bank/众安：手工或只读路径。** 公开资料确认 App 内可交易美股，但公开 Open Banking 页面未确认股票下单 API，因此不做逆向、不做自动点击。
 3. **IBKR：备用路径。** 如果 uSMART API 权限申请不顺或稳定性不够，再接 IBKR TWS/IB Gateway。
+
+## 当前现实路径
+
+uSMART Open API 需要公司或渠道资质后，本项目主线调整为：
+
+```text
+AKShare 美股报价
+  + TuShare 基本面/历史
+  + ZA/uSMART 结单、截图、CSV、手工记录导入
+  → 本地策略、风控、持仓、成交、PnL 和纪律复盘
+```
+
+新增接口：
+
+```bash
+curl http://127.0.0.1:8000/market/quotes
+curl http://127.0.0.1:8000/data-sources/status
+curl http://127.0.0.1:8000/portfolio/holdings
+```
+
+导入券商记录：
+
+```bash
+curl -X POST http://127.0.0.1:8000/imports/broker-records \
+  -H 'Content-Type: application/json' \
+  -d '{"broker":"usmart","records":[{"broker":"usmart","record_type":"holding","ticker":"NVDA","qty":3,"price":164.8,"executed_at":"07/06 15:20","note":"uSMART 持仓页手工导入"}]}'
+```
 
 ### uSMART / 香港盈立
 

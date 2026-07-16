@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .models import DisciplineEvent, OrderRequest, Side, StrategyModel, TradeOrder, WatchlistItem
+from .models import DisciplineEvent, Holding, OrderRequest, Side, StrategyModel, TradeOrder, WatchlistItem
 
 MAG7 = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA"]
 
@@ -90,6 +90,29 @@ ORDERS = [
     TradeOrder(id="ord_001", broker="paper", ticker="META", side=Side.buy, qty=8, order_type="LMT", limit_price=712.4, status="FILLED", created_at="07/02 22:35"),
     TradeOrder(id="ord_002", broker="paper", ticker="NVDA", side=Side.sell, qty=12, order_type="LMT", limit_price=164.8, status="RISK_REVIEW", created_at="07/06 14:53"),
     TradeOrder(id="ord_003", broker="paper", ticker="AMZN", side=Side.buy, qty=10, order_type="LMT", limit_price=226.2, status="PENDING", created_at="07/06 14:55"),
+]
+
+HOLDINGS = [
+    Holding(
+        broker="za-bank",
+        ticker="META",
+        qty=8,
+        avg_cost=681.2,
+        market_price=712.4,
+        market_value=5699.2,
+        pnl=249.6,
+        updated_at="07/06 15:10",
+    ),
+    Holding(
+        broker="usmart",
+        ticker="MSFT",
+        qty=6,
+        avg_cost=486.5,
+        market_price=503.1,
+        market_value=3018.6,
+        pnl=99.6,
+        updated_at="07/06 15:10",
+    ),
 ]
 
 SAMPLE_REQUEST = OrderRequest(ticker="META", side=Side.buy, qty=1, limit_price=712.4)
