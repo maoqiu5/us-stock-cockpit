@@ -10,6 +10,8 @@ import {
   Gauge,
   Layers3,
   LineChart,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   Radar,
   ShieldCheck,
@@ -68,6 +70,9 @@ type WatchlistItem = {
   trend: string;
   eligible: boolean;
   signal: string;
+  signal_reason: string;
+  model_score: number;
+  model_reason: string;
 };
 
 type DisciplineEvent = {
@@ -368,7 +373,7 @@ function getUSMarketSession(now = new Date()) {
   return {
     isOpen,
     label: isOpen ? "NYSE Open" : "NYSE Closed",
-    refreshLabel: isOpen ? "10秒自动刷新" : "开盘后10秒刷新"
+    refreshLabel: isOpen ? "1分钟自动刷新" : "开盘后1分钟刷新"
   };
 }
 
@@ -418,7 +423,9 @@ export default function Home() {
   const [selectedTicker, setSelectedTicker] = useState("NOK.US");
   const [analysisType, setAnalysisType] = useState("offline");
   const [preparedOrder, setPreparedOrder] = useState<PreparedOrder | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [validatingModels, setValidatingModels] = useState(false);
   const [notice, setNotice] = useState("");
   const [marketSession, setMarketSession] = useState(() => getUSMarketSession());
   const loadingRef = useRef(false);
@@ -475,7 +482,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const refreshSeconds = marketSession.isOpen ? 10 : data.gold?.is_trading_session ? data.gold.refresh_seconds : 0;
+    const refreshSeconds = marketSession.isOpen ? 60 : data.gold?.is_trading_session ? data.gold.refresh_seconds : 0;
     if (!refreshSeconds) return undefined;
     load().catch(() => setNotice("自动刷新失败，正在保留最近一次数据。"));
     const timer = window.setInterval(() => {
@@ -615,17 +622,39 @@ export default function Home() {
   }
 
   async function validateModels() {
-    const result = await fetchJson<ModelValidationItem[]>("/models/validation");
-    setValidation(result);
-    setNotice(`已验证 ${result.length} 个策略模型，结果已更新到股票池页。`);
+    if (validatingModels) return;
+    setValidatingModels(true);
+    setNotice("正在批量回测当前股票池，并把模型分写入信号判断...");
+    try {
+      const result = await fetchJson<ModelValidationItem[]>("/models/validation");
+      setValidation(result);
+      await load();
+      const tested = result.reduce((total, item) => total + item.tested, 0);
+      setNotice(`已验证 ${result.length} 个策略模型、${tested} 个股票样本，模型分已更新到股票池和持仓建议。`);
+    } catch (error) {
+      setNotice(error instanceof Error ? `模型验证失败：${error.message}` : "模型验证失败，请稍后重试。");
+    } finally {
+      setValidatingModels(false);
+    }
   }
 
   return (
-    <main className="shell">
+    <main className={`shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
-          <span>美股驾驶舱</span>
-          <small>US STOCK COCKPIT</small>
+          <div>
+            <span>美股驾驶舱</span>
+            <small>US STOCK COCKPIT</small>
+          </div>
+          <button
+            className="sidebar-toggle"
+            type="button"
+            onClick={() => setSidebarCollapsed((value) => !value)}
+            aria-label={sidebarCollapsed ? "展开左侧导航" : "折叠左侧导航"}
+            title={sidebarCollapsed ? "展开左侧导航" : "折叠左侧导航"}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+          </button>
         </div>
         <nav className="nav">
           {nav.map((item) => {
@@ -700,6 +729,7 @@ export default function Home() {
             load={load}
             importPreviousClose={importPreviousClose}
             validateModels={validateModels}
+            validatingModels={validatingModels}
           />
         )}
         {active === "gold" && data.gold && <GoldWatch monitor={data.gold} trades={data.goldTrades} loadGold={loadGold} setNotice={setNotice} />}
@@ -940,7 +970,8 @@ function Watchlist({
   deleteWatchlistTicker,
   load,
   importPreviousClose,
-  validateModels
+  validateModels,
+  validatingModels
 }: {
   items: WatchlistItem[];
   quotes: MarketQuote[];
@@ -956,9 +987,20 @@ function Watchlist({
   load: () => Promise<void>;
   importPreviousClose: () => Promise<PreviousCloseImportResult>;
   validateModels: () => Promise<void>;
+  validatingModels: boolean;
 }) {
   const quoteMap = new Map(quotes.map((quote) => [quote.ticker, quote]));
-  const holdingTickers = new Set(holdings.map((holding) => holding.ticker));
+  const accountTotal = holdings.reduce((sum, holding) => sum + holding.market_value, 0);
+  const holdingMap = new Map<string, { qty: number; cost: number; value: number; pnl: number; brokers: Set<string> }>();
+  holdings.forEach((holding) => {
+    const current = holdingMap.get(holding.ticker) || { qty: 0, cost: 0, value: 0, pnl: 0, brokers: new Set<string>() };
+    current.qty += holding.qty;
+    current.cost += holding.avg_cost * holding.qty;
+    current.value += holding.market_value;
+    current.pnl += holding.pnl;
+    current.brokers.add(holding.broker);
+    holdingMap.set(holding.ticker, current);
+  });
   return (
     <div className="page-grid">
       <section className="panel full">
@@ -970,7 +1012,9 @@ function Watchlist({
           <div className="button-row">
             <button onClick={load}>刷新行情</button>
             <button onClick={importPreviousClose}>导入昨收</button>
-            <button onClick={validateModels}>验证模型</button>
+            <button onClick={validateModels} disabled={validatingModels}>
+              {validatingModels ? "验证中..." : "验证模型"}
+            </button>
           </div>
         </div>
         <div className="add-stock-row">
@@ -983,27 +1027,39 @@ function Watchlist({
           </label>
           <button className="primary" disabled={!newTicker.trim()} onClick={() => addStockToWatchlist(newTicker)}>加入股票池</button>
         </div>
-        <table>
+        <table className="watchlist-table">
           <thead>
-            <tr><th>股票</th><th>现价</th><th>涨跌</th><th>PE</th><th>PEG</th><th>ROI</th><th>增长</th><th>趋势</th><th>资格</th><th>信号</th><th>操作</th></tr>
+            <tr><th>股票</th><th>现价</th><th>涨跌</th><th>持仓</th><th>成本</th><th>持仓盈亏</th><th>仓位</th><th>PE</th><th>PEG</th><th>ROI</th><th>趋势</th><th>模型分</th><th>信号</th><th>信号依据</th><th>操作</th></tr>
           </thead>
           <tbody>
             {items.map((item) => {
               const quote = quoteMap.get(item.ticker);
+              const holding = holdingMap.get(item.ticker);
+              const avgCost = holding && holding.qty ? holding.cost / holding.qty : 0;
+              const pnlPct = holding && holding.cost ? (holding.pnl / holding.cost) * 100 : 0;
+              const weight = holding && accountTotal ? (holding.value / accountTotal) * 100 : 0;
+              const hasModelValidation = item.model_reason && item.model_reason !== "尚未验证模型";
               return (
                 <tr key={item.ticker}>
-                  <td><b>{item.ticker}</b><span>{item.name}</span></td>
+                  <td><b>{item.ticker}</b><span>{holding ? `${Array.from(holding.brokers).join(" / ")} · ${item.name}` : item.name}</span></td>
                   <td>{quote ? fmtMoney(quote.price) : "-"}</td>
                   <td className={quote && quote.pct_change < 0 ? "negative" : "positive"}>{quote ? pct(quote.pct_change) : "-"}</td>
+                  <td>{holding ? holding.qty.toFixed(holding.qty < 1 ? 4 : 2) : "-"}</td>
+                  <td>{holding ? fmtMoney(avgCost) : "-"}</td>
+                  <td className={holding && holding.pnl < 0 ? "negative" : "positive"}>{holding ? `${fmtMoney(holding.pnl)} / ${pct(pnlPct)}` : "-"}</td>
+                  <td>{holding ? pct(weight) : "-"}</td>
                   <td>{item.pe}</td>
                   <td>{item.peg}</td>
                   <td>{pct(item.roi)}</td>
-                  <td>{pct(item.growth)}</td>
                   <td>{item.trend}</td>
-                  <td>{item.eligible ? "可交易" : "观察"}</td>
-                  <td><em>{item.signal}</em></td>
+                  <td className="model-cell">
+                    {hasModelValidation ? item.model_score : "-"}
+                    <span>{item.model_reason || "点击验证模型后生成"}</span>
+                  </td>
+                  <td><em>{holding ? `${item.signal} · 持仓纪律` : item.signal}</em></td>
+                  <td><span>{item.signal_reason || "-"}</span></td>
                   <td>
-                    {holdingTickers.has(item.ticker) ? (
+                    {holding ? (
                       <span>持仓中</span>
                     ) : (
                       <button onClick={() => deleteWatchlistTicker(item.ticker)}>删除</button>

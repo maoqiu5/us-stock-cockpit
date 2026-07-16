@@ -271,6 +271,9 @@ class WatchlistItem(BaseModel):
     trend: str
     eligible: bool
     signal: str
+    signal_reason: str = ""
+    model_score: int = 0
+    model_reason: str = ""
 
 
 class AddWatchlistRequest(BaseModel):

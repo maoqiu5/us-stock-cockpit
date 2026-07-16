@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from .broker import USmartBrokerAdapter, broker_capabilities, broker_from_env, execution_config
-from .data_sources import data_source_statuses, market_quotes
+from .data_sources import data_source_statuses, dynamic_watchlist, market_quotes
 from .gold_monitor import gold_monitor_snapshot
 from .historical_prices import is_us_market_open, previous_close_quotes, validate_yahoo_ticker
-from .models import AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DisciplineEvent, GoldManualTrade, GoldManualTradeRequest, GoldMonitor, Holding, HoldingAdvice, ManualExecutionRequest, ModelValidationItem, OrderRequest, PortfolioOptimization, PreviousCloseImportResult, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, ValidateTickerResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult
+from .models import AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DisciplineEvent, GoldManualTrade, GoldManualTradeRequest, GoldMonitor, Holding, HoldingAdvice, ManualExecutionRequest, ModelValidationItem, OrderRequest, PortfolioOptimization, PreviousCloseImportResult, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, ValidateTickerResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult, MarketQuote
 from .risk import RiskConfig, RiskEngine
 from .seed import EVENTS, HOLDINGS, ORDERS, STRATEGIES, WATCHLIST
 from .strategy import generate_signal, run_backtest
@@ -34,6 +38,47 @@ state = {
 }
 
 GOLD_MANUAL_TRADES: list[GoldManualTrade] = []
+LOCAL_STATE_PATH = Path(os.environ.get("LOCAL_STATE_PATH", "data/local_state.json"))
+MODEL_VALIDATION_BY_TICKER: dict[str, dict[str, float | str]] = {}
+
+
+def _load_local_state() -> None:
+    if not LOCAL_STATE_PATH.exists():
+        return
+    payload = json.loads(LOCAL_STATE_PATH.read_text(encoding="utf-8"))
+    WATCHLIST[:] = [WatchlistItem.model_validate(item) for item in payload.get("watchlist", [])] or WATCHLIST
+    HOLDINGS[:] = [Holding.model_validate(item) for item in payload.get("holdings", [])] or HOLDINGS
+    EVENTS[:] = [DisciplineEvent.model_validate(item) for item in payload.get("events", [])] or EVENTS
+    ORDERS[:] = [TradeOrder.model_validate(item) for item in payload.get("orders", [])] or ORDERS
+    GOLD_MANUAL_TRADES[:] = [GoldManualTrade.model_validate(item) for item in payload.get("gold_manual_trades", [])]
+    saved_state = payload.get("state", {})
+    state.update({
+        "automation_paused": saved_state.get("automation_paused", state["automation_paused"]),
+        "quote_snapshot": [MarketQuote.model_validate(item) for item in saved_state.get("quote_snapshot") or []] or None,
+        "quote_snapshot_source": saved_state.get("quote_snapshot_source", state["quote_snapshot_source"]),
+        "quote_snapshot_as_of": saved_state.get("quote_snapshot_as_of", state["quote_snapshot_as_of"]),
+    })
+
+
+def _save_local_state() -> None:
+    LOCAL_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "watchlist": [item.model_dump(mode="json") for item in WATCHLIST],
+        "holdings": [item.model_dump(mode="json") for item in HOLDINGS],
+        "events": [item.model_dump(mode="json") for item in EVENTS],
+        "orders": [item.model_dump(mode="json") for item in ORDERS],
+        "gold_manual_trades": [item.model_dump(mode="json") for item in GOLD_MANUAL_TRADES],
+        "state": {
+            "automation_paused": state["automation_paused"],
+            "quote_snapshot_source": state["quote_snapshot_source"],
+            "quote_snapshot_as_of": state["quote_snapshot_as_of"],
+            "quote_snapshot": [item.model_dump(mode="json") for item in state["quote_snapshot"]] if state["quote_snapshot"] else None,
+        },
+    }
+    LOCAL_STATE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+_load_local_state()
 
 
 def risk_engine() -> RiskEngine:
@@ -97,7 +142,7 @@ def backtest(strategy_id: str, request: BacktestRequest):
 
 @app.get("/watchlist")
 def watchlist():
-    return WATCHLIST
+    return dynamic_watchlist(WATCHLIST, HOLDINGS, MODEL_VALIDATION_BY_TICKER)
 
 
 @app.post("/watchlist")
@@ -126,6 +171,7 @@ def add_watchlist_item(request: AddWatchlistRequest) -> WatchlistItem:
         signal="WATCH" if abs(pct_change) < 3 else "RISK",
     )
     WATCHLIST.append(item)
+    _save_local_state()
     return item
 
 
@@ -163,6 +209,7 @@ def delete_watchlist_item(ticker: str) -> dict[str, str]:
     WATCHLIST[:] = [item for item in WATCHLIST if item.ticker != normalized]
     if len(WATCHLIST) == before:
         raise HTTPException(status_code=404, detail="ticker not found")
+    _save_local_state()
     return {"deleted": normalized}
 
 
@@ -256,6 +303,7 @@ def create_gold_manual_trade(request: GoldManualTradeRequest) -> GoldManualTrade
             created_at=request.executed_at,
         ),
     )
+    _save_local_state()
     return trade
 
 
@@ -266,6 +314,7 @@ def delete_gold_manual_trade(trade_id: str) -> dict[str, str]:
         raise HTTPException(status_code=404, detail="gold manual trade not found")
     GOLD_MANUAL_TRADES.pop(index)
     EVENTS[:] = [event for event in EVENTS if event.id != f"evt_{trade_id}"]
+    _save_local_state()
     return {"deleted": trade_id}
 
 
@@ -277,35 +326,55 @@ def holdings() -> list[Holding]:
 @app.get("/advice/holdings")
 def holding_advice() -> list[HoldingAdvice]:
     account_total = max(_account_total(), 1)
+    watchlist_by_ticker = {item.ticker: item for item in dynamic_watchlist(WATCHLIST, HOLDINGS, MODEL_VALIDATION_BY_TICKER)}
     advice: list[HoldingAdvice] = []
     for holding in HOLDINGS:
         cost_basis = max(holding.avg_cost * holding.qty, 0.01)
         pnl_pct = holding.pnl / cost_basis * 100
         current_weight = holding.market_value / account_total
+        item = watchlist_by_ticker.get(holding.ticker)
+        signal = item.signal if item else "WATCH"
+        signal_reason = item.signal_reason if item else "无股票池信号。"
+        trend = item.trend if item else "未知"
+        pe = item.pe if item else 0
+        peg = item.peg if item else 0
+        roi = item.roi if item else 0
         if pnl_pct <= -35:
             action = "减仓/禁止补仓"
             risk_level = "high"
-            confidence = 0.82
+            confidence = 0.9 if signal == "RISK" else 0.82
             target = min(current_weight, 0.03)
-            reason = f"持仓亏损 {pnl_pct:.1f}%，已超过纪律线，先控制单票风险。"
+            reason = f"持仓亏损 {pnl_pct:.1f}%，已超过 -35% 强纪律线；股票池信号 {signal}，{signal_reason}"
         elif pnl_pct <= -15:
-            action = "持有观察"
-            risk_level = "medium"
-            confidence = 0.68
+            action = "持有观察/禁止补仓" if signal == "RISK" else "持有观察"
+            risk_level = "high" if signal == "RISK" else "medium"
+            confidence = 0.78 if signal == "RISK" else 0.68
             target = min(current_weight, 0.05)
-            reason = f"持仓亏损 {pnl_pct:.1f}%，等待模型转强或止损条件确认。"
+            reason = f"持仓亏损 {pnl_pct:.1f}%，处于 -15% 观察线以下；趋势 {trend}，股票池信号 {signal}。{signal_reason}"
         elif current_weight > 0.12:
-            action = "降低集中度"
+            action = "降低集中度" if signal != "BUY" else "只减集中度不加仓"
             risk_level = "medium"
-            confidence = 0.64
+            confidence = 0.72
             target = 0.08
-            reason = f"当前权重 {current_weight * 100:.1f}%，超过单票观察上限。"
+            reason = f"当前权重 {current_weight * 100:.1f}%，超过 12% 单票观察上限；趋势 {trend}，PE {pe:.2f} / PEG {peg:.2f}。"
+        elif signal == "RISK":
+            action = "暂停加仓"
+            risk_level = "medium"
+            confidence = 0.7
+            target = min(current_weight, 0.05)
+            reason = f"持仓暂未触发亏损线，但股票池信号为 RISK：{signal_reason}"
+        elif signal == "BUY" and pnl_pct >= -5 and current_weight < 0.05:
+            action = "小额加仓候选"
+            risk_level = "low"
+            confidence = 0.66
+            target = min(0.05, current_weight + 0.02)
+            reason = f"持仓亏损/盈利 {pnl_pct:.1f}%，仓位 {current_weight * 100:.1f}%，股票池 BUY；PE {pe:.2f} / PEG {peg:.2f} / ROI {roi:.2f}%。"
         else:
             action = "继续跟踪"
             risk_level = "low"
-            confidence = 0.55
+            confidence = 0.58
             target = max(current_weight, 0.02)
-            reason = "未触发强制卖出条件，继续用模型信号跟踪。"
+            reason = f"未触发强制卖出或加仓条件；趋势 {trend}，股票池信号 {signal}，继续等更明确的价格和因子共振。"
         advice.append(
             HoldingAdvice(
                 ticker=holding.ticker,
@@ -372,8 +441,11 @@ def portfolio_optimization() -> PortfolioOptimization:
 @app.get("/models/validation")
 def model_validation() -> list[ModelValidationItem]:
     output: list[ModelValidationItem] = []
+    ticker_results: dict[str, list[tuple[str, float, float]]] = {item.ticker: [] for item in WATCHLIST}
     for strategy in STRATEGIES:
         results = [run_backtest(strategy.id, item.ticker, "2026-05-01", "2026-07-16") for item in WATCHLIST]
+        for result in results:
+            ticker_results.setdefault(result.ticker, []).append((strategy.id, result.annual_return, result.max_drawdown))
         best = max(results, key=lambda result: result.annual_return)
         avg_return = sum(result.annual_return for result in results) / max(len(results), 1)
         avg_drawdown = sum(result.max_drawdown for result in results) / max(len(results), 1)
@@ -393,12 +465,40 @@ def model_validation() -> list[ModelValidationItem]:
                 tuning_note=note,
             )
         )
+    MODEL_VALIDATION_BY_TICKER.clear()
+    MODEL_VALIDATION_BY_TICKER.update(_ticker_validation_scores(ticker_results))
     return output
+
+
+def _ticker_validation_scores(ticker_results: dict[str, list[tuple[str, float, float]]]) -> dict[str, dict[str, float | str]]:
+    scores: dict[str, dict[str, float | str]] = {}
+    for ticker, rows in ticker_results.items():
+        if not rows:
+            continue
+        avg_return = sum(row[1] for row in rows) / len(rows)
+        avg_drawdown = sum(row[2] for row in rows) / len(rows)
+        best_strategy, best_return, _ = max(rows, key=lambda row: row[1])
+        score = round(max(0, min(100, 50 + avg_return * 0.8 + avg_drawdown * 0.4)))
+        if score < 40:
+            reason = f"{best_strategy} 最佳但平均回撤 {avg_drawdown:.1f}%，模型分偏低"
+        elif score < 55:
+            reason = f"{best_strategy} 最佳，平均年化 {avg_return:.1f}%，仍需观察"
+        else:
+            reason = f"{best_strategy} 最佳，平均年化 {avg_return:.1f}%，回撤 {avg_drawdown:.1f}%"
+        scores[ticker] = {
+            "score": score,
+            "reason": reason,
+            "best_strategy": best_strategy,
+            "average_annual_return": round(avg_return, 2),
+            "average_max_drawdown": round(avg_drawdown, 2),
+            "best_strategy_return": round(best_return, 2),
+        }
+    return scores
 
 
 @app.get("/signals")
 def signals() -> list[Signal]:
-    return [generate_signal(item) for item in WATCHLIST]
+    return [generate_signal(item) for item in dynamic_watchlist(WATCHLIST, HOLDINGS, MODEL_VALIDATION_BY_TICKER)]
 
 
 @app.get("/discipline/events")
