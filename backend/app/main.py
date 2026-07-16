@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -7,7 +10,7 @@ from .broker import USmartBrokerAdapter, broker_capabilities, broker_from_env, e
 from .data_sources import data_source_statuses, market_quotes
 from .gold_monitor import gold_monitor_snapshot
 from .historical_prices import is_us_market_open, previous_close_quotes, validate_yahoo_ticker
-from .models import AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DisciplineEvent, GoldManualTrade, GoldManualTradeRequest, GoldMonitor, Holding, HoldingAdvice, ManualExecutionRequest, ModelValidationItem, OrderRequest, PortfolioOptimization, PreviousCloseImportResult, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, ValidateTickerResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult
+from .models import AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DisciplineEvent, GoldManualTrade, GoldManualTradeRequest, GoldMonitor, Holding, HoldingAdvice, ManualExecutionRequest, MarketQuote, ModelValidationItem, OrderRequest, PortfolioOptimization, PreviousCloseImportResult, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, ValidateTickerResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult
 from .risk import RiskConfig, RiskEngine
 from .seed import EVENTS, HOLDINGS, ORDERS, STRATEGIES, WATCHLIST
 from .strategy import generate_signal, run_backtest
@@ -25,6 +28,8 @@ app.add_middleware(
 )
 
 CASH_BALANCE = 3.59
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+LOCAL_STATE_PATH = DATA_DIR / "local_state.json"
 
 state = {
     "automation_paused": False,
@@ -34,6 +39,59 @@ state = {
 }
 
 GOLD_MANUAL_TRADES: list[GoldManualTrade] = []
+
+
+def dump_model(model) -> dict:
+    return model.model_dump(mode="json")
+
+
+def load_local_state() -> None:
+    if not LOCAL_STATE_PATH.exists():
+        return
+    try:
+        payload = json.loads(LOCAL_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    if "watchlist" in payload:
+        WATCHLIST[:] = [WatchlistItem(**record) for record in payload["watchlist"]]
+    if "holdings" in payload:
+        HOLDINGS[:] = [Holding(**record) for record in payload["holdings"]]
+    if "events" in payload:
+        EVENTS[:] = [DisciplineEvent(**record) for record in payload["events"]]
+    if "orders" in payload:
+        ORDERS[:] = [TradeOrder(**record) for record in payload["orders"]]
+    GOLD_MANUAL_TRADES[:] = [GoldManualTrade(**record) for record in payload.get("gold_manual_trades", [])]
+
+    app_state = payload.get("state", {})
+    state["automation_paused"] = bool(app_state.get("automation_paused", state["automation_paused"]))
+    state["quote_snapshot_source"] = app_state.get("quote_snapshot_source", state["quote_snapshot_source"])
+    state["quote_snapshot_as_of"] = app_state.get("quote_snapshot_as_of", state["quote_snapshot_as_of"])
+    quote_snapshot = app_state.get("quote_snapshot")
+    state["quote_snapshot"] = [MarketQuote(**record) for record in quote_snapshot] if quote_snapshot else None
+
+
+def save_local_state() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "watchlist": [dump_model(item) for item in WATCHLIST],
+        "holdings": [dump_model(item) for item in HOLDINGS],
+        "events": [dump_model(item) for item in EVENTS],
+        "orders": [dump_model(item) for item in ORDERS],
+        "gold_manual_trades": [dump_model(trade) for trade in GOLD_MANUAL_TRADES],
+        "state": {
+            "automation_paused": state["automation_paused"],
+            "quote_snapshot_source": state["quote_snapshot_source"],
+            "quote_snapshot_as_of": state["quote_snapshot_as_of"],
+            "quote_snapshot": [dump_model(quote) for quote in state["quote_snapshot"]] if state["quote_snapshot"] else None,
+        },
+    }
+    temp_path = LOCAL_STATE_PATH.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(LOCAL_STATE_PATH)
+
+
+load_local_state()
 
 
 def risk_engine() -> RiskEngine:
@@ -126,6 +184,7 @@ def add_watchlist_item(request: AddWatchlistRequest) -> WatchlistItem:
         signal="WATCH" if abs(pct_change) < 3 else "RISK",
     )
     WATCHLIST.append(item)
+    save_local_state()
     return item
 
 
@@ -163,6 +222,7 @@ def delete_watchlist_item(ticker: str) -> dict[str, str]:
     WATCHLIST[:] = [item for item in WATCHLIST if item.ticker != normalized]
     if len(WATCHLIST) == before:
         raise HTTPException(status_code=404, detail="ticker not found")
+    save_local_state()
     return {"deleted": normalized}
 
 
@@ -204,6 +264,7 @@ def import_previous_close() -> PreviousCloseImportResult:
             created_at=state["quote_snapshot_as_of"],
         ),
     )
+    save_local_state()
     return PreviousCloseImportResult(
         as_of=state["quote_snapshot_as_of"],
         source=state["quote_snapshot_source"],
@@ -239,8 +300,9 @@ def gold_manual_trades() -> list[GoldManualTrade]:
 @app.post("/gold/manual-trades")
 def create_gold_manual_trade(request: GoldManualTradeRequest) -> GoldManualTrade:
     grams = request.grams if request.grams is not None else round(request.amount_cny / request.price, 4)
+    next_id = max((int(trade.id.rsplit("_", 1)[-1]) for trade in GOLD_MANUAL_TRADES if trade.id.rsplit("_", 1)[-1].isdigit()), default=0) + 1
     trade = GoldManualTrade(
-        id=f"gold_manual_{len(GOLD_MANUAL_TRADES) + 1}",
+        id=f"gold_manual_{next_id}",
         side=request.side,
         amount_cny=request.amount_cny,
         grams=grams,
@@ -261,6 +323,7 @@ def create_gold_manual_trade(request: GoldManualTradeRequest) -> GoldManualTrade
             created_at=request.executed_at,
         ),
     )
+    save_local_state()
     return trade
 
 
@@ -271,6 +334,7 @@ def delete_gold_manual_trade(trade_id: str) -> dict[str, str]:
         raise HTTPException(status_code=404, detail="gold manual trade not found")
     GOLD_MANUAL_TRADES.pop(index)
     EVENTS[:] = [event for event in EVENTS if event.id != f"evt_{trade_id}"]
+    save_local_state()
     return {"deleted": trade_id}
 
 
@@ -414,12 +478,14 @@ def discipline_events():
 @app.post("/automation/pause")
 def pause_automation() -> dict[str, bool]:
     state["automation_paused"] = True
+    save_local_state()
     return {"automation_paused": True}
 
 
 @app.post("/automation/resume")
 def resume_automation() -> dict[str, bool]:
     state["automation_paused"] = False
+    save_local_state()
     return {"automation_paused": False}
 
 
@@ -445,6 +511,7 @@ def submit_order(request: OrderRequest) -> TradeOrder:
         )
     order = broker_from_env().place_order(request)
     ORDERS.insert(0, order)
+    save_local_state()
     return order
 
 
@@ -476,6 +543,7 @@ def create_manual_execution(request: ManualExecutionRequest) -> TradeOrder:
         created_at=request.executed_at,
     )
     ORDERS.insert(0, order)
+    save_local_state()
     return order
 
 
@@ -524,6 +592,7 @@ def import_broker_records(request: BrokerImportRequest) -> BrokerImportResult:
                 ),
             )
             trades_recorded += 1
+    save_local_state()
     return BrokerImportResult(
         imported=len(request.records),
         holdings_updated=holdings_updated,
@@ -551,6 +620,7 @@ def import_usmart_screenshot(request: USmartScreenshotImportRequest) -> USmartSc
             existing.updated_at = parsed.updated_at
         else:
             HOLDINGS.append(parsed)
+    save_local_state()
     return USmartScreenshotImportResult(
         broker=request.broker,
         image_path=request.image_path,
@@ -579,6 +649,7 @@ def import_za_screenshot(request: ZABankScreenshotImportRequest) -> ZABankScreen
             existing.updated_at = parsed.updated_at
         else:
             HOLDINGS.append(parsed)
+    save_local_state()
     return ZABankScreenshotImportResult(
         image_path=request.image_path,
         imported_holdings=len(parsed_holdings),
