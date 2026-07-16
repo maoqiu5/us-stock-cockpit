@@ -58,7 +58,10 @@ AKShare 美股报价
 curl http://127.0.0.1:8000/market/quotes
 curl http://127.0.0.1:8000/data-sources/status
 curl http://127.0.0.1:8000/portfolio/holdings
+curl -X POST http://127.0.0.1:8000/market/import-previous-close
 ```
+
+`/market/import-previous-close` 用于美股未开盘时导入上一交易日收盘价。接口会优先读取 Yahoo 最近日线；如果公开接口不可用，会回退到内置昨收快照，随后重估本地持仓、市值和持仓盈亏。
 
 导入 uSMART 持仓截图：
 

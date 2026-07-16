@@ -26,6 +26,7 @@ const ZA_SCREENSHOT_PATH =
 type DashboardSummary = {
   account_total: number;
   today_pnl: number;
+  pnl_label: string;
   discipline_score: number;
   active_signals: number;
   signal_breakdown: { buy: number; sell: number; hold: number; watch: number };
@@ -175,6 +176,17 @@ type ZABankScreenshotResult = {
   imported_holdings: number;
   warnings: string[];
   holdings: Holding[];
+};
+
+type PreviousCloseImportResult = {
+  as_of: string;
+  source: string;
+  imported: number;
+  account_total: number;
+  total_pnl: number;
+  quotes: MarketQuote[];
+  holdings: Holding[];
+  warnings: string[];
 };
 
 type BacktestResult = {
@@ -365,6 +377,19 @@ export default function Home() {
     setNotice(`已从 ZA Bank 截图导入 ${result.imported_holdings} 条持仓。`);
   }
 
+  async function importPreviousClose() {
+    const result = await fetchJson<PreviousCloseImportResult>("/market/import-previous-close", { method: "POST" });
+    await load();
+    setNotice(`已导入 ${result.imported} 条上一交易日收盘价，账户估值 ${fmtMoney(result.account_total)}，持仓盈亏 ${fmtMoney(result.total_pnl)}。`);
+    return result;
+  }
+
+  async function importPreviousCloseAndBacktest() {
+    await importPreviousClose();
+    await runBacktest();
+    setActive("analysis");
+  }
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -428,7 +453,7 @@ export default function Home() {
           />
         )}
         {active === "strategies" && <Strategies strategies={data.strategies} />}
-        {active === "watchlist" && <Watchlist items={data.watchlist} quotes={data.quotes} load={load} />}
+        {active === "watchlist" && <Watchlist items={data.watchlist} quotes={data.quotes} load={load} importPreviousClose={importPreviousClose} />}
         {active === "discipline" && (
           <Discipline
             events={data.events}
@@ -452,6 +477,7 @@ export default function Home() {
             setSelectedTicker={setSelectedTicker}
             setAnalysisType={setAnalysisType}
             runBacktest={runBacktest}
+            importPreviousCloseAndBacktest={importPreviousCloseAndBacktest}
           />
         )}
       </section>
@@ -491,7 +517,7 @@ function Dashboard({
 }) {
   return (
     <div className="page-grid">
-      <Metric label="账户总额" value={fmtMoney(summary.account_total)} hint={`${fmtMoney(summary.today_pnl)} 今日`} tone="green" icon={WalletCards} />
+      <Metric label="账户总额" value={fmtMoney(summary.account_total)} hint={`${fmtMoney(summary.today_pnl)} ${summary.pnl_label || "今日"}`} tone="green" icon={WalletCards} />
       <Metric label="自动化纪律分" value={`${summary.discipline_score}`} hint="本周 2 次人工干预" tone="green" icon={Bot} />
       <Metric label="活跃信号" value={`${summary.active_signals}`} hint={`买入 ${summary.signal_breakdown.buy} / 卖出 ${summary.signal_breakdown.sell} / 持有 ${summary.signal_breakdown.hold} / 观察 ${summary.signal_breakdown.watch}`} tone="amber" icon={Radar} />
       <Metric label="最大回撤" value={pct(summary.max_drawdown)} hint={`策略上限 ${summary.max_drawdown_limit}%`} tone="danger" icon={LineChart} />
@@ -651,17 +677,20 @@ function Strategies({ strategies }: { strategies: StrategyModel[] }) {
   );
 }
 
-function Watchlist({ items, quotes, load }: { items: WatchlistItem[]; quotes: MarketQuote[]; load: () => Promise<void> }) {
+function Watchlist({ items, quotes, load, importPreviousClose }: { items: WatchlistItem[]; quotes: MarketQuote[]; load: () => Promise<void>; importPreviousClose: () => Promise<PreviousCloseImportResult> }) {
   const quoteMap = new Map(quotes.map((quote) => [quote.ticker, quote]));
   return (
     <div className="page-grid">
     <section className="panel full">
       <div className="panel-head">
         <div>
-          <h2>MAG7 股票池</h2>
-          <p>估值、盈利质量、增长和趋势同时满足纪律要求，才允许进入自动信号队列。</p>
+          <h2>真实持仓股票池</h2>
+          <p>开盘前可先导入上一交易日收盘价，用昨收估值跑纪律模型和回测。</p>
         </div>
-        <button onClick={load}>刷新行情</button>
+        <div className="button-row">
+          <button onClick={load}>刷新行情</button>
+          <button onClick={importPreviousClose}>导入昨收</button>
+        </div>
       </div>
       <table>
         <thead>
@@ -814,6 +843,7 @@ function Analysis(props: {
   setSelectedTicker: (value: string) => void;
   setAnalysisType: (value: string) => void;
   runBacktest: () => Promise<void>;
+  importPreviousCloseAndBacktest: () => Promise<void>;
 }) {
   const result = props.backtest;
   return (
@@ -856,6 +886,7 @@ function Analysis(props: {
           <label>开始日期<input value="2026-05-01" readOnly /></label>
           <label>结束日期<input value="2026-06-22" readOnly /></label>
           <button className="primary" onClick={props.runBacktest}>运行评测</button>
+          <button onClick={props.importPreviousCloseAndBacktest}>导入昨收并评测</button>
         </div>
 
         {result && (

@@ -89,6 +89,17 @@ class Holding(BaseModel):
     updated_at: str
 
 
+class PreviousCloseImportResult(BaseModel):
+    as_of: str
+    source: str
+    imported: int
+    account_total: float
+    total_pnl: float
+    quotes: list[MarketQuote]
+    holdings: list[Holding]
+    warnings: list[str]
+
+
 class BrokerImportRecord(BaseModel):
     broker: Literal["za-bank", "usmart", "ibkr", "manual"]
     record_type: Literal["holding", "trade"]

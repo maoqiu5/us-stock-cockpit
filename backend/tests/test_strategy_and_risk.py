@@ -1,8 +1,9 @@
 from backend.app.models import OrderRequest, Side
+import backend.app.main as main_module
 from backend.app.broker import USmartBrokerAdapter
 from backend.app.data_sources import market_quotes
 from backend.app.main import import_broker_records
-from backend.app.models import BrokerImportRecord, BrokerImportRequest
+from backend.app.models import BrokerImportRecord, BrokerImportRequest, MarketQuote
 from backend.app.usmart_importer import parse_usmart_portfolio_screenshot
 from backend.app.za_importer import parse_za_bank_portfolio_screenshot
 from backend.app.risk import RiskConfig, RiskEngine
@@ -63,6 +64,21 @@ def test_market_quotes_fallback_returns_requested_symbol():
     quotes = market_quotes(["NOK.US"])
     assert quotes[0].ticker == "NOK.US"
     assert quotes[0].price > 0
+
+
+def test_previous_close_import_updates_holdings(monkeypatch):
+    def fake_previous_close(tickers):
+        return [
+            MarketQuote(ticker=ticker, name=ticker, price=12.0, change=0.1, pct_change=0.84, volume=0, source="test previous close", delay_seconds=0, updated_at="07/15 16:00")
+            for ticker in tickers
+        ], []
+
+    monkeypatch.setattr(main_module, "previous_close_quotes", fake_previous_close)
+    result = main_module.import_previous_close()
+    assert result.imported >= 1
+    assert result.source == "昨收快照"
+    assert result.holdings[0].market_price == 12.0
+    assert result.account_total > 0
 
 
 def test_import_broker_records_updates_holdings_and_trades():
