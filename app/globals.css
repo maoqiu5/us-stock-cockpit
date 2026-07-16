@@ -908,6 +908,12 @@ button:disabled {
   text-anchor: middle;
 }
 
+.trend-empty-label {
+  fill: #8d98a5;
+  font-size: 14px;
+  text-anchor: middle;
+}
+
 .trend-point-tooltip-svg {
   opacity: 0;
   pointer-events: none;

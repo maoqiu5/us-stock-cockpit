@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import math
+import json
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -76,8 +76,8 @@ def gold_monitor_snapshot() -> GoldMonitor:
 
 
 def _minsheng_accumulated_gold_quote() -> dict:
-    # 民生/浙商/工银积存金暂无个人开放 API；先以公开上海金 Au99.99 作为银行积存金参考锚。
-    for quote_loader in (_akshare_sge_gold_quote, _sina_sge_gold_quote):
+    # 民生/浙商/工银积存金暂无个人开放 API；先用建行主动积存公开分时价作为银行积存金实盘参考锚。
+    for quote_loader in (_ccb_accumulated_gold_quote, _akshare_sge_gold_quote, _sina_sge_gold_quote):
         try:
             return quote_loader()
         except Exception:
@@ -93,7 +93,7 @@ def _minsheng_accumulated_gold_quote() -> dict:
         "reference_name": "民生银行黄金截图基准",
         "status": "交易中",
         "time": _now_label(),
-        "trend_points": _synthetic_intraday_trend_points(SCREENSHOT_PRICE),
+        "trend_points": [],
         "source": "民生银行截图基准 / 实时接口预留",
     }
 
@@ -101,7 +101,44 @@ def _minsheng_accumulated_gold_quote() -> dict:
 def _intraday_trend_points(quote: dict) -> list[dict[str, float | str]]:
     if quote.get("trend_points"):
         return quote["trend_points"]
-    return _synthetic_intraday_trend_points(quote["price"])
+    return []
+
+
+def _ccb_accumulated_gold_quote() -> dict:
+    response = httpx.get(
+        "https://gold1.ccb.com/webtran/static/trendchart/getAccountData.gsp",
+        params={"dateType": "timeSharing", "sec_code": "999933"},
+        headers={
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Referer": "https://gold1.ccb.com/chn/home/gold_new/hqzs/index.shtml",
+            "User-Agent": "Mozilla/5.0",
+            "X-Requested-With": "XMLHttpRequest",
+        },
+        timeout=12,
+        trust_env=False,
+    )
+    response.raise_for_status()
+    payload = json.loads(response.text.strip())
+    points = json.loads(payload["realTimePrice"])
+    if not points:
+        raise ValueError("CCB accumulated gold returned no trend points")
+    last_price = float(payload["new_pri"])
+    previous_close = float(payload["lastclo_quo"])
+    pct_change = float(payload["price_chg"])
+    return {
+        "price": last_price,
+        "change": round(last_price - previous_close, 2),
+        "pct_change": pct_change,
+        "day_high": float(payload["hig_pri"]),
+        "day_low": float(payload["low_pri"]),
+        "reference_price": previous_close,
+        "symbol": "CCB_999933",
+        "reference_name": "建设银行主动积存价 / 银行积存金真实分时参考",
+        "status": "交易中" if _is_bank_gold_trading_session() else "非交易时段",
+        "time": _ccb_time_label(str(payload["time"])),
+        "trend_points": _trend_points_from_ccb_rows(points),
+        "source": f"建设银行黄金积存报价 999933 · 本地刷新 {_now_label()}",
+    }
 
 
 def _akshare_sge_gold_quote() -> dict:
@@ -168,9 +205,21 @@ def _sina_sge_gold_quote() -> dict:
         "reference_name": "新浪财经上海金 Au99.99 / 银行积存金参考锚",
         "status": "交易中" if _is_bank_gold_trading_session() else "非交易时段",
         "time": quote_time,
-        "trend_points": _synthetic_intraday_trend_points(price),
+        "trend_points": [{"time": quote_time.split(" ", 1)[-1], "price": price}],
         "source": f"新浪财经/上海黄金交易所 Au99.99 · 本地刷新 {_now_label()}",
     }
+
+
+def _trend_points_from_ccb_rows(rows: list[dict]) -> list[dict[str, float | str]]:
+    points: list[dict[str, float | str]] = []
+    last_index = len(rows) - 1
+    for index, row in enumerate(rows):
+        if index % 5 != 0 and index != last_index:
+            continue
+        raw_time = str(row["time"])
+        label = _ccb_point_time_label(raw_time)
+        points.append({"time": label, "price": round(float(row["new_pri"]), 2)})
+    return points
 
 
 def _trend_points_from_rows(frame) -> list[dict[str, float | str]]:
@@ -185,52 +234,6 @@ def _trend_points_from_rows(frame) -> list[dict[str, float | str]]:
             time_label = raw_time
         points.append({"time": time_label, "price": round(float(row["现价"]), 2)})
     return points
-
-
-def _synthetic_intraday_trend_points(price: float) -> list[dict[str, float | str]]:
-    current = datetime.now(ZoneInfo("Asia/Shanghai"))
-    current_minute = current.hour * 60 + current.minute
-    if current_minute < 2 * 60 + 30:
-        current_minute += 24 * 60
-    anchors = [
-        (9 * 60 + 10, 881.74),
-        (9 * 60 + 40, 879.55),
-        (10 * 60 + 20, 878.10),
-        (11 * 60 + 10, 878.55),
-        (13 * 60 + 20, 877.35),
-        (14 * 60 + 5, 876.38),
-        (14 * 60 + 45, 877.45),
-        (15 * 60 + 20, 878.75),
-        (18 * 60 + 31, price),
-    ]
-    if current_minute > anchors[-1][0]:
-        anchors.append((current_minute, price))
-    end_minute = max(min(current_minute, anchors[-1][0]), anchors[0][0])
-    sampled_minutes = list(range(anchors[0][0], end_minute + 1, 5))
-    if sampled_minutes[-1] != end_minute:
-        sampled_minutes.append(end_minute)
-    points: list[dict[str, float | str]] = []
-    for minute in sampled_minutes:
-        label = current.strftime("%H:%M:%S") if minute == sampled_minutes[-1] else _minute_label(minute)
-        points.append({"time": label, "price": _interpolated_price(minute, anchors)})
-    return points
-
-
-def _interpolated_price(minute: int, anchors: list[tuple[int, float]]) -> float:
-    for index in range(1, len(anchors)):
-        left_minute, left_price = anchors[index - 1]
-        right_minute, right_price = anchors[index]
-        if minute <= right_minute:
-            progress = (minute - left_minute) / max(right_minute - left_minute, 1)
-            base = left_price + (right_price - left_price) * progress
-            wave = math.sin(minute / 11) * 0.13 + math.sin(minute / 23) * 0.07
-            return round(base + wave, 2)
-    return round(anchors[-1][1], 2)
-
-
-def _minute_label(minute: int) -> str:
-    normalized = minute % (24 * 60)
-    return f"{normalized // 60:02d}:{normalized % 60:02d}"
 
 
 def _akshare_time_label(raw_updated_at: str, raw_time: str) -> str:
@@ -249,6 +252,21 @@ def _sina_time_label(raw_updated_at: str) -> str:
         _, month, day, time_value = match.groups()
         return f"{month}/{day} {time_value}"
     return _now_label()
+
+
+def _ccb_time_label(raw_time: str) -> str:
+    match = re.search(r"(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2}:\d{2})", raw_time)
+    if match:
+        _, month, day, time_value = match.groups()
+        return f"{month}/{day} {time_value}"
+    return _now_label()
+
+
+def _ccb_point_time_label(raw_time: str) -> str:
+    parts = raw_time.split(",")
+    if len(parts) >= 6:
+        return f"{int(parts[3]):02d}:{int(parts[4]):02d}:{int(parts[5]):02d}"
+    return raw_time
 
 
 def _is_bank_gold_trading_session(now: datetime | None = None) -> bool:

@@ -50,7 +50,7 @@ def data_source_statuses() -> list[DataSourceStatus]:
             purpose="民生/浙商/工银积存金参考盯盘",
             configured=True,
             status="active",
-            detail="优先使用 AKShare 上海金 Au99.99 分钟行情，备用新浪 SGE_AU9999；银行 App 专属买卖价后续可接适配器。",
+            detail="优先使用建设银行主动积存公开分时价，备用 AKShare 上海金 Au99.99 与新浪 SGE_AU9999；民生/浙商/工行专属买卖价后续可接适配器。",
         ),
     ]
 

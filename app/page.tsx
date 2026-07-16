@@ -1141,7 +1141,7 @@ function GoldWatch({ monitor, loadGold }: { monitor: GoldMonitor; loadGold: () =
         <div className="panel-head">
           <div>
             <h2>民生积存金盯盘</h2>
-            <p>{monitor.product_name} 当前按公开上海金实时价作为银行积存金参考锚，计划资金 {fmtCny(monitor.planned_capital)}；系统只做盯盘和纪律分析，不自动交易。</p>
+            <p>{monitor.product_name} 当前按银行积存金公开分时价作为参考锚，计划资金 {fmtCny(monitor.planned_capital)}；系统只做盯盘和纪律分析，不自动交易。</p>
           </div>
           <div className="button-row">
             <span className="badge">{monitor.risk_level}</span>
@@ -1207,6 +1207,11 @@ function GoldWatch({ monitor, loadGold }: { monitor: GoldMonitor; loadGold: () =
                 <title>{`${point.time} · ¥${point.price.toFixed(2)}/克`}</title>
               </g>
             ))}
+            {trend.points.length === 0 && (
+              <text className="trend-empty-label" x={trend.width / 2} y={trend.height / 2}>
+                暂无真实分时点
+              </text>
+            )}
           </svg>
         </div>
       </section>
