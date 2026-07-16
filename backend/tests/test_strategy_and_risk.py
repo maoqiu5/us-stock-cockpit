@@ -130,6 +130,20 @@ def test_watchlist_add_and_advice_endpoints(monkeypatch):
     assert allocation.cash_target > 0
 
 
+def test_watchlist_add_rejects_invalid_ticker(monkeypatch):
+    monkeypatch.setattr(
+        main_module,
+        "validate_yahoo_ticker",
+        lambda ticker: (_ for _ in ()).throw(ValueError("unknown ticker")),
+    )
+    try:
+        main_module.add_watchlist_item(AddWatchlistRequest(ticker="NOTAREALSTOCK123"))
+    except Exception as exc:
+        assert "未能识别" in str(exc.detail)
+    else:
+        raise AssertionError("invalid ticker should not be added")
+
+
 def test_watchlist_delete_blocks_current_holding():
     try:
         main_module.delete_watchlist_item("NOK.US")

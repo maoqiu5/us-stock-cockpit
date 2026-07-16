@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .broker import USmartBrokerAdapter, broker_capabilities, broker_from_env, execution_config
 from .data_sources import data_source_statuses, market_quotes
-from .historical_prices import previous_close_quotes, validate_yahoo_ticker
+from .historical_prices import is_us_market_open, previous_close_quotes, validate_yahoo_ticker
 from .models import AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DisciplineEvent, Holding, HoldingAdvice, ManualExecutionRequest, ModelValidationItem, OrderRequest, PortfolioOptimization, PreviousCloseImportResult, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, ValidateTickerResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult
 from .risk import RiskConfig, RiskEngine
 from .seed import EVENTS, HOLDINGS, ORDERS, STRATEGIES, WATCHLIST
@@ -108,7 +108,7 @@ def add_watchlist_item(request: AddWatchlistRequest) -> WatchlistItem:
     validation = validate_ticker(ticker)
     if not validation.valid:
         raise HTTPException(status_code=400, detail=validation.reason)
-    pct_change = 0
+    pct_change = validation.pct_change
     trend = "上行" if pct_change > 1 else ("下行" if pct_change < -1 else "横盘")
     item = WatchlistItem(
         ticker=ticker,
@@ -131,17 +131,22 @@ def validate_ticker(ticker: str = Query(default="")) -> ValidateTickerResult:
     normalized = ticker.strip().upper()
     if not normalized:
         return ValidateTickerResult(ticker="", valid=False, reason="请输入股票代码。")
+    market_open = is_us_market_open()
     try:
         quote = validate_yahoo_ticker(normalized)
-    except Exception as exc:
+    except Exception:
         return ValidateTickerResult(ticker=normalized, valid=False, reason=f"未能识别 {normalized}，请检查代码或交易所后缀。")
+    price_mode = "交易时段，已拉取 Yahoo 盘中价" if market_open else "休市，已拉取上一交易日收盘价"
     return ValidateTickerResult(
         ticker=normalized,
         valid=True,
         name=quote.name if quote.name and quote.name != normalized else f"{normalized} · Yahoo 已识别",
         price=quote.price,
+        pct_change=quote.pct_change,
         source=quote.source,
-        reason="已通过 Yahoo 日线校验，可加入股票池。",
+        market_open=market_open,
+        updated_at=quote.updated_at,
+        reason=f"{price_mode}，可加入股票池。",
     )
 
 

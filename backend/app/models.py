@@ -213,7 +213,10 @@ class ValidateTickerResult(BaseModel):
     valid: bool
     name: str = ""
     price: float = 0
+    pct_change: float = 0
     source: str = ""
+    market_open: bool = False
+    updated_at: str = ""
     reason: str = ""
 
 
