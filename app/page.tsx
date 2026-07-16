@@ -201,6 +201,13 @@ type GoldMonitor = {
   first_order_amount: number;
   first_order_grams: number;
   reserve_cash: number;
+  remaining_capital: number;
+  holding_grams: number;
+  holding_cost: number;
+  holding_market_value: number;
+  holding_pnl: number;
+  holding_pnl_pct: number;
+  average_cost: number;
   reference_symbol: string;
   reference_name: string;
   reference_change_pct: number;
@@ -1202,18 +1209,24 @@ function GoldWatch({
     setNotice("已记录一笔黄金线下买入，后续分析会纳入这笔成交。");
   }
 
+  async function deleteGoldTrade(tradeId: string) {
+    await fetchJson(`/gold/manual-trades/${tradeId}`, { method: "DELETE" });
+    await loadGold();
+    setNotice("已删除一笔黄金线下记录，持仓收益和策略建议已重算。");
+  }
+
   return (
     <div className="page-grid gold-page">
-      <Metric label="计划资金" value={fmtCny(monitor.planned_capital)} hint={`${monitor.product_name} · ${monitor.product_type}`} tone="amber" icon={Coins} />
+      <Metric label="剩余资金" value={fmtCny(monitor.remaining_capital)} hint={`计划 ${fmtCny(monitor.planned_capital)} · 已投入 ${fmtCny(monitor.holding_cost)}`} tone="amber" icon={Coins} />
       <Metric label="实时金价" value={`¥${monitor.live_price.toFixed(2)}/克`} hint={`${monitor.trading_status} · ${monitor.quote_time}`} tone={monitor.pct_change < 0 ? "danger" : "green"} />
-      <Metric label="预计可买" value={`${monitor.estimated_grams.toFixed(4)} 克`} hint={`按 ${fmtCny(monitor.planned_capital)} / ¥${monitor.live_price.toFixed(2)}`} tone="green" />
-      <Metric label="首笔纪律" value={fmtCny(monitor.first_order_amount)} hint={`约 ${monitor.first_order_grams.toFixed(4)} 克，留存 ${fmtCny(monitor.reserve_cash)}`} tone="amber" />
+      <Metric label="持仓收益" value={fmtCny(monitor.holding_pnl)} hint={`${pct(monitor.holding_pnl_pct)} · 市值 ${fmtCny(monitor.holding_market_value)}`} tone={monitor.holding_pnl < 0 ? "danger" : "green"} />
+      <Metric label="成本均价（元/克）" value={monitor.average_cost ? `¥${monitor.average_cost.toFixed(2)}` : "未持仓"} hint={`持仓 ${monitor.holding_grams.toFixed(4)} 克`} tone="amber" />
 
       <section className="panel wide gold-hero">
         <div className="panel-head">
           <div>
             <h2>民生积存金盯盘</h2>
-            <p>{monitor.product_name} 当前按银行积存金公开分时价作为参考锚，计划资金 {fmtCny(monitor.planned_capital)}；系统只做盯盘和纪律分析，不自动交易。</p>
+            <p>{monitor.product_name} 当前按银行积存金公开分时价作为参考锚，剩余资金 {fmtCny(monitor.remaining_capital)}；系统只做盯盘和纪律分析，不自动交易。</p>
           </div>
           <div className="button-row">
             <span className="badge">{monitor.risk_level}</span>
@@ -1227,7 +1240,8 @@ function GoldWatch({
             <dl>
               <div><dt>今日涨跌</dt><dd>{monitor.change.toFixed(2)} / {pct(monitor.pct_change)}</dd></div>
               <div><dt>日内高低</dt><dd>{monitor.day_high.toFixed(2)} / {monitor.day_low.toFixed(2)}</dd></div>
-              <div><dt>1万预计</dt><dd>{monitor.estimated_grams.toFixed(4)} 克</dd></div>
+              <div><dt>持仓收益</dt><dd>{fmtCny(monitor.holding_pnl)} / {pct(monitor.holding_pnl_pct)}</dd></div>
+              <div><dt>成本均价</dt><dd>{monitor.average_cost ? `¥${monitor.average_cost.toFixed(2)}/克` : "未持仓"}</dd></div>
               <div><dt>买入规则</dt><dd>{fmtCny(monitor.min_purchase_amount)} 起，{fmtCny(monitor.increment_amount)} 递增</dd></div>
             </dl>
           </div>
@@ -1361,6 +1375,7 @@ function GoldWatch({
               </div>
               <b>{trade.grams.toFixed(4)} 克</b>
               <span>{fmtCny(trade.amount_cny)} · ¥{trade.price.toFixed(2)}/克</span>
+              <button type="button" onClick={() => deleteGoldTrade(trade.id)}>删除</button>
             </article>
           ))}
           {!trades.length && <p>还没有线下成交记录。你买入后在这里补一笔，系统就能按真实仓位分析。</p>}

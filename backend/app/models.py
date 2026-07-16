@@ -95,6 +95,13 @@ class GoldMonitor(BaseModel):
     first_order_amount: float
     first_order_grams: float
     reserve_cash: float
+    remaining_capital: float
+    holding_grams: float
+    holding_cost: float
+    holding_market_value: float
+    holding_pnl: float
+    holding_pnl_pct: float
+    average_cost: float
     reference_symbol: str
     reference_name: str
     reference_change_pct: float

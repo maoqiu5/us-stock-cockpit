@@ -1013,13 +1013,21 @@ button:disabled {
 
 .gold-trade-list article {
   display: grid;
-  grid-template-columns: 1.2fr 0.7fr 1fr;
+  grid-template-columns: 1.2fr 0.7fr 1fr auto;
   gap: 12px;
   align-items: center;
 }
 
 .gold-trade-list article strong {
   display: block;
+}
+
+.gold-trade-list article button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-color: rgba(255, 91, 129, 0.4);
+  color: #ff9cb4;
+  background: rgba(255, 91, 129, 0.08);
 }
 
 .gold-trade-list p {

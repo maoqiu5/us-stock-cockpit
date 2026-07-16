@@ -223,7 +223,7 @@ def source_statuses():
 
 @app.get("/gold/monitor")
 def gold_monitor() -> GoldMonitor:
-    return gold_monitor_snapshot()
+    return gold_monitor_snapshot(GOLD_MANUAL_TRADES)
 
 
 @app.get("/gold/manual-trades")
@@ -247,7 +247,7 @@ def create_gold_manual_trade(request: GoldManualTradeRequest) -> GoldManualTrade
     EVENTS.insert(
         0,
         DisciplineEvent(
-            id=f"evt_gold_manual_{len(GOLD_MANUAL_TRADES)}",
+            id=f"evt_{trade.id}",
             ticker="CMBC-AU",
             title="黄金线下操作已记录",
             reason=f"{request.executed_at} {request.side.value} {grams:.4f} 克，成交价 ¥{request.price:.2f}/克，金额 ¥{request.amount_cny:.2f}。",
@@ -257,6 +257,16 @@ def create_gold_manual_trade(request: GoldManualTradeRequest) -> GoldManualTrade
         ),
     )
     return trade
+
+
+@app.delete("/gold/manual-trades/{trade_id}")
+def delete_gold_manual_trade(trade_id: str) -> dict[str, str]:
+    index = next((idx for idx, trade in enumerate(GOLD_MANUAL_TRADES) if trade.id == trade_id), None)
+    if index is None:
+        raise HTTPException(status_code=404, detail="gold manual trade not found")
+    GOLD_MANUAL_TRADES.pop(index)
+    EVENTS[:] = [event for event in EVENTS if event.id != f"evt_{trade_id}"]
+    return {"deleted": trade_id}
 
 
 @app.get("/portfolio/holdings")

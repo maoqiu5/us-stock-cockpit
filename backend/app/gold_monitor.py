@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from .models import GoldMonitor
+from .models import GoldManualTrade, GoldMonitor
 
 
 PRODUCT_CODE = "CMBC-AU"
@@ -25,16 +25,18 @@ INCREMENT_AMOUNT = 1.0
 BUY_FEE_RATE = 0.0
 
 
-def gold_monitor_snapshot() -> GoldMonitor:
+def gold_monitor_snapshot(manual_trades: list[GoldManualTrade] | None = None) -> GoldMonitor:
     quote = _minsheng_accumulated_gold_quote()
     is_trading_session = quote["status"] == "交易中" or _is_bank_gold_trading_session()
-    first_order_amount = _first_order_amount(quote["price"], quote["pct_change"])
-    reserve_cash = round(PLANNED_CAPITAL - first_order_amount, 2)
+    position = _gold_position_summary(manual_trades or [], quote["price"])
+    first_order_amount = _first_order_amount(quote["price"], quote["pct_change"], position["remaining_capital"], position["holding_grams"])
+    reserve_cash = round(position["remaining_capital"] - first_order_amount, 2)
     action, confidence, advice, watch_points = _gold_advice(
         price=quote["price"],
         pct_change=quote["pct_change"],
         day_high=quote["day_high"],
         day_low=quote["day_low"],
+        position=position,
     )
     return GoldMonitor(
         product_code=PRODUCT_CODE,
@@ -58,6 +60,13 @@ def gold_monitor_snapshot() -> GoldMonitor:
         first_order_amount=first_order_amount,
         first_order_grams=round(first_order_amount / quote["price"], 4),
         reserve_cash=reserve_cash,
+        remaining_capital=position["remaining_capital"],
+        holding_grams=position["holding_grams"],
+        holding_cost=position["holding_cost"],
+        holding_market_value=position["holding_market_value"],
+        holding_pnl=position["holding_pnl"],
+        holding_pnl_pct=position["holding_pnl_pct"],
+        average_cost=position["average_cost"],
         reference_symbol=quote["symbol"],
         reference_name=quote["reference_name"],
         reference_change_pct=quote["pct_change"],
@@ -277,18 +286,91 @@ def _is_bank_gold_trading_session(now: datetime | None = None) -> bool:
     return minutes >= 9 * 60 or minutes < 2 * 60 + 30
 
 
-def _first_order_amount(price: float, pct_change: float) -> float:
+def _gold_position_summary(trades: list[GoldManualTrade], live_price: float) -> dict[str, float]:
+    holding_grams = 0.0
+    holding_cost = 0.0
+    for trade in trades:
+        multiplier = 1 if trade.side.value == "BUY" else -1
+        holding_grams += multiplier * trade.grams
+        holding_cost += multiplier * trade.amount_cny
+    holding_grams = round(max(holding_grams, 0), 4)
+    holding_cost = round(max(holding_cost, 0), 2)
+    holding_market_value = round(holding_grams * live_price, 2)
+    holding_pnl = round(holding_market_value - holding_cost, 2)
+    average_cost = round(holding_cost / holding_grams, 2) if holding_grams else 0.0
+    holding_pnl_pct = round(holding_pnl / holding_cost * 100, 2) if holding_cost else 0.0
+    remaining_capital = round(max(PLANNED_CAPITAL - holding_cost, 0), 2)
+    return {
+        "remaining_capital": remaining_capital,
+        "holding_grams": holding_grams,
+        "holding_cost": holding_cost,
+        "holding_market_value": holding_market_value,
+        "holding_pnl": holding_pnl,
+        "holding_pnl_pct": holding_pnl_pct,
+        "average_cost": average_cost,
+    }
+
+
+def _first_order_amount(price: float, pct_change: float, remaining_capital: float, holding_grams: float) -> float:
+    if remaining_capital < MIN_PURCHASE_AMOUNT:
+        return 0.0
+    if holding_grams > 0 and remaining_capital < PLANNED_CAPITAL * 0.25:
+        return 0.0
     if pct_change <= -0.8:
         amount = 4000
     elif pct_change <= -0.3:
         amount = 3000
     else:
         amount = 2000
-    return float(max(MIN_PURCHASE_AMOUNT, min(amount, PLANNED_CAPITAL)))
+    return float(max(MIN_PURCHASE_AMOUNT, min(amount, remaining_capital)))
 
 
-def _gold_advice(price: float, pct_change: float, day_high: float, day_low: float):
+def _gold_advice(price: float, pct_change: float, day_high: float, day_low: float, position: dict[str, float]):
     intraday_position = (price - day_low) / max(day_high - day_low, 0.01)
+    if position["holding_grams"] > 0:
+        if position["holding_pnl_pct"] <= -3:
+            return (
+                "暂停加仓",
+                0.78,
+                "当前黄金持仓已经出现明显浮亏，先不要机械补仓；等价格重新站回成本均价附近或出现更低风险的分批信号。",
+                [
+                    f"当前浮亏 {position['holding_pnl_pct']:.2f}%",
+                    f"成本均价 ¥{position['average_cost']:.2f}/克",
+                    "新增买入前先确认剩余资金和最大可承受回撤",
+                ],
+            )
+        if price >= position["average_cost"] * 1.025:
+            return (
+                "持有观察",
+                0.70,
+                "当前价格高于成本均价，已有安全垫；不追高加仓，优先观察是否继续走强。",
+                [
+                    f"持仓收益 {position['holding_pnl_pct']:+.2f}%",
+                    "若短线急涨，记录止盈观察价",
+                    "剩余资金继续保留等待回落",
+                ],
+            )
+        if pct_change <= -0.4 and intraday_position < 0.4 and position["remaining_capital"] >= MIN_PURCHASE_AMOUNT:
+            return (
+                "小额补仓",
+                0.66,
+                "价格回落且仍有剩余资金，可以考虑小额补仓，但单笔不要超过剩余资金的三分之一。",
+                [
+                    f"剩余资金 ¥{position['remaining_capital']:.2f}",
+                    f"当前低于成本 ¥{position['average_cost']:.2f}/克",
+                    "补仓后继续保留现金，不一次性打满",
+                ],
+            )
+        return (
+            "持仓跟踪",
+            0.64,
+            "当前已有黄金仓位，先根据成本均价、剩余资金和日内位置做动态观察，不需要频繁操作。",
+            [
+                f"持仓 {position['holding_grams']:.4f} 克",
+                f"持仓收益 {position['holding_pnl']:+.2f} 元",
+                "下一笔操作必须先记录成交价和克数",
+            ],
+        )
     if pct_change <= -0.8 and intraday_position < 0.35:
         return (
             "分批试探",

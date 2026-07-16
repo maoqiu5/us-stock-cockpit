@@ -156,6 +156,12 @@ def test_gold_manual_trade_records_real_offline_execution():
     assert trade.price == 880
     assert len(main_module.gold_manual_trades()) == before + 1
     assert main_module.gold_manual_trades()[0].id == trade.id
+    snapshot = main_module.gold_monitor()
+    assert snapshot.holding_grams >= trade.grams
+    assert snapshot.average_cost > 0
+    assert snapshot.remaining_capital < snapshot.planned_capital
+    assert main_module.delete_gold_manual_trade(trade.id) == {"deleted": trade.id}
+    assert len(main_module.gold_manual_trades()) == before
 
 
 def test_previous_close_import_updates_holdings(monkeypatch):
