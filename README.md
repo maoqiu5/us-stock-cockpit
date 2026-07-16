@@ -60,6 +60,14 @@ curl http://127.0.0.1:8000/data-sources/status
 curl http://127.0.0.1:8000/portfolio/holdings
 ```
 
+导入 uSMART 持仓截图：
+
+```bash
+curl -X POST http://127.0.0.1:8000/imports/usmart-screenshot \
+  -H 'Content-Type: application/json' \
+  -d '{"image_path":"/absolute/path/to/usmart_position.jpg","as_of":"07/16 14:02"}'
+```
+
 导入券商记录：
 
 ```bash

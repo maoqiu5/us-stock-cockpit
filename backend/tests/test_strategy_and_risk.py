@@ -3,6 +3,7 @@ from backend.app.broker import USmartBrokerAdapter
 from backend.app.data_sources import market_quotes
 from backend.app.main import import_broker_records
 from backend.app.models import BrokerImportRecord, BrokerImportRequest
+from backend.app.usmart_importer import parse_usmart_portfolio_screenshot
 from backend.app.risk import RiskConfig, RiskEngine
 from backend.app.seed import WATCHLIST
 from backend.app.strategy import generate_signal, run_backtest, score_watchlist_item
@@ -90,3 +91,11 @@ def test_import_broker_records_updates_holdings_and_trades():
     assert result.imported == 2
     assert result.holdings_updated == 1
     assert result.trades_recorded == 1
+
+
+def test_usmart_screenshot_template_parser_extracts_holdings():
+    net_asset, holdings, warnings = parse_usmart_portfolio_screenshot()
+    assert net_asset == 1784.16
+    assert {holding.ticker for holding in holdings} == {"NOK.US", "SMR.US"}
+    assert next(holding for holding in holdings if holding.ticker == "NOK.US").qty == 99
+    assert "TEMPLATE_V1_USED" in warnings

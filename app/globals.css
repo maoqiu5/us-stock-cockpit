@@ -689,6 +689,13 @@ td span {
   background: rgba(24, 210, 176, 0.12);
 }
 
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .analysis-form {
   display: grid;
   grid-template-columns: 1.3fr 1.2fr 1fr repeat(2, 1fr) 1.2fr;

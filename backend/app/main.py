@@ -5,10 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .broker import USmartBrokerAdapter, broker_capabilities, broker_from_env, execution_config
 from .data_sources import data_source_statuses, market_quotes
-from .models import BacktestRequest, BrokerImportRequest, BrokerImportResult, Holding, ManualExecutionRequest, OrderRequest, Signal, TradeOrder
+from .models import BacktestRequest, BrokerImportRequest, BrokerImportResult, Holding, ManualExecutionRequest, OrderRequest, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult
 from .risk import RiskConfig, RiskEngine
 from .seed import EVENTS, HOLDINGS, ORDERS, STRATEGIES, WATCHLIST
 from .strategy import generate_signal, run_backtest
+from .usmart_importer import parse_usmart_portfolio_screenshot
 
 app = FastAPI(title="美股驾驶舱 API", version="0.1.0")
 
@@ -224,6 +225,33 @@ def import_broker_records(request: BrokerImportRequest) -> BrokerImportResult:
         holdings_updated=holdings_updated,
         trades_recorded=trades_recorded,
         message="导入完成，已更新本地持仓和交易记录。",
+    )
+
+
+@app.post("/imports/usmart-screenshot")
+def import_usmart_screenshot(request: USmartScreenshotImportRequest) -> USmartScreenshotImportResult:
+    net_asset, parsed_holdings, warnings = parse_usmart_portfolio_screenshot(
+        image_path=request.image_path,
+        extracted_text=request.extracted_text,
+        as_of=request.as_of,
+    )
+    for parsed in parsed_holdings:
+        existing = next((item for item in HOLDINGS if item.broker == parsed.broker and item.ticker == parsed.ticker), None)
+        if existing:
+            existing.qty = parsed.qty
+            existing.avg_cost = parsed.avg_cost
+            existing.market_price = parsed.market_price
+            existing.market_value = parsed.market_value
+            existing.pnl = parsed.pnl
+            existing.updated_at = parsed.updated_at
+        else:
+            HOLDINGS.append(parsed)
+    return USmartScreenshotImportResult(
+        image_path=request.image_path,
+        net_asset=net_asset,
+        imported_holdings=len(parsed_holdings),
+        warnings=warnings,
+        holdings=parsed_holdings,
     )
 
 

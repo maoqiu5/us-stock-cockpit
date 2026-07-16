@@ -18,6 +18,8 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const USMART_SCREENSHOT_PATH =
+  "/Users/brian/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_5oxgvzo5wkcv21_448a/temp/RWTemp/2026-07/b3cb3351d259bd6f77573a1d380b26e0.jpg";
 
 type DashboardSummary = {
   account_total: number;
@@ -154,6 +156,15 @@ type Holding = {
   pnl: number;
   currency: string;
   updated_at: string;
+};
+
+type USmartScreenshotResult = {
+  broker: "usmart";
+  image_path: string;
+  net_asset: number;
+  imported_holdings: number;
+  warnings: string[];
+  holdings: Holding[];
 };
 
 type BacktestResult = {
@@ -347,6 +358,19 @@ export default function Home() {
     setNotice("已导入一组 uSMART 样例持仓和成交记录。");
   }
 
+  async function importUsmartScreenshot() {
+    const result = await fetchJson<USmartScreenshotResult>("/imports/usmart-screenshot", {
+      method: "POST",
+      body: JSON.stringify({
+        image_path: USMART_SCREENSHOT_PATH,
+        as_of: "07/16 14:02"
+      })
+    });
+    await load();
+    setActive("discipline");
+    setNotice(`已从 uSMART 截图导入 ${result.imported_holdings} 条持仓，净资产 ${fmtMoney(result.net_asset)}。`);
+  }
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -418,6 +442,7 @@ export default function Home() {
             holdings={data.holdings}
             recordZaManualExecution={recordZaManualExecution}
             importSampleBrokerRecord={importSampleBrokerRecord}
+            importUsmartScreenshot={importUsmartScreenshot}
           />
         )}
         {active === "analysis" && (
@@ -697,13 +722,15 @@ function Discipline({
   orders,
   holdings,
   recordZaManualExecution,
-  importSampleBrokerRecord
+  importSampleBrokerRecord,
+  importUsmartScreenshot
 }: {
   events: DisciplineEvent[];
   orders: Order[];
   holdings: Holding[];
   recordZaManualExecution: () => Promise<void>;
   importSampleBrokerRecord: () => Promise<void>;
+  importUsmartScreenshot: () => Promise<void>;
 }) {
   return (
     <div className="page-grid">
@@ -752,7 +779,10 @@ function Discipline({
             <h2>券商持仓对账</h2>
             <p>ZA Bank 和 uSMART 当前走结单、截图、CSV 或手工记录导入，系统统一生成本地持仓和 PnL。</p>
           </div>
-          <button onClick={importSampleBrokerRecord}>导入样例记录</button>
+          <div className="button-row">
+            <button onClick={importUsmartScreenshot}>导入 uSMART 截图</button>
+            <button onClick={importSampleBrokerRecord}>导入样例记录</button>
+          </div>
         </div>
         <table>
           <thead>

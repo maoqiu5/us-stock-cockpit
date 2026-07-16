@@ -112,6 +112,21 @@ class BrokerImportResult(BaseModel):
     message: str
 
 
+class USmartScreenshotImportRequest(BaseModel):
+    image_path: str = ""
+    extracted_text: str = ""
+    as_of: str = ""
+
+
+class USmartScreenshotImportResult(BaseModel):
+    broker: Literal["usmart"] = "usmart"
+    image_path: str
+    net_asset: float
+    imported_holdings: int
+    warnings: list[str]
+    holdings: list[Holding]
+
+
 class PreparedBrokerRequest(BaseModel):
     broker: str
     url: str
