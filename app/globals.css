@@ -846,8 +846,8 @@ button:disabled {
 
 .gold-trend {
   position: relative;
-  min-height: 292px;
-  padding: 16px 16px 42px;
+  min-height: 300px;
+  padding: 16px;
   border: 1px solid rgba(245, 195, 87, 0.22);
   border-radius: 7px;
   background:
@@ -858,15 +858,20 @@ button:disabled {
 .gold-trend svg {
   display: block;
   width: 100%;
-  height: 240px;
+  height: 268px;
 }
 
-.gold-trend line {
+.gold-trend .trend-grid {
   stroke: rgba(255,255,255,0.08);
   stroke-width: 1;
 }
 
-.gold-trend polyline {
+.gold-trend .trend-axis {
+  stroke: rgba(245, 195, 87, 0.22);
+  stroke-width: 1;
+}
+
+.gold-trend .trend-line {
   fill: none;
   stroke: #d6a836;
   stroke-width: 3;
@@ -875,29 +880,56 @@ button:disabled {
   filter: drop-shadow(0 0 10px rgba(245, 195, 87, 0.22));
 }
 
-.gold-trend circle {
+.gold-trend .trend-dot {
   fill: #f5c357;
   stroke: #2b1c04;
   stroke-width: 2;
 }
 
-.gold-trend-labels,
-.gold-trend-times {
-  position: absolute;
-  left: 16px;
-  right: 16px;
-  display: flex;
-  justify-content: space-between;
-  color: var(--muted);
+.gold-trend .trend-hit {
+  fill: transparent;
+  stroke: transparent;
+  cursor: crosshair;
+}
+
+.gold-trend .trend-point:hover .trend-dot {
+  fill: #fff1b8;
+  stroke: #f5c357;
+  stroke-width: 3;
+}
+
+.trend-y-label,
+.trend-x-label {
+  fill: #8d98a5;
   font-size: 12px;
 }
 
-.gold-trend-labels {
-  top: 14px;
+.trend-x-label {
+  text-anchor: middle;
 }
 
-.gold-trend-times {
-  bottom: 16px;
+.trend-point-tooltip-svg {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.trend-point:hover .trend-point-tooltip-svg {
+  opacity: 1;
+}
+
+.trend-point-tooltip-svg rect {
+  fill: rgba(5, 8, 13, 0.94);
+  stroke: rgba(245, 195, 87, 0.38);
+}
+
+.trend-point-tooltip-svg text {
+  fill: #f8e6ae;
+  font-size: 12px;
+}
+
+.trend-point-tooltip-svg text + text {
+  fill: var(--green);
 }
 
 .allocation-summary {

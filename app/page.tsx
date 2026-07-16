@@ -1097,17 +1097,24 @@ function Watchlist({
 function GoldWatch({ monitor, loadGold }: { monitor: GoldMonitor; loadGold: () => Promise<void> }) {
   const trend = useMemo(() => {
     const width = 720;
-    const height = 220;
-    const padding = 24;
+    const height = 260;
+    const plot = { left: 58, right: 18, top: 18, bottom: 38 };
     const prices = monitor.trend_points.map((point) => point.price);
     const min = Math.min(...prices, monitor.day_low);
     const max = Math.max(...prices, monitor.day_high);
     const span = Math.max(max - min, 0.01);
+    const plotWidth = width - plot.left - plot.right;
+    const plotHeight = height - plot.top - plot.bottom;
     const points = monitor.trend_points.map((point, index) => {
-      const x = padding + (index / Math.max(monitor.trend_points.length - 1, 1)) * (width - padding * 2);
-      const y = padding + ((max - point.price) / span) * (height - padding * 2);
+      const x = plot.left + (index / Math.max(monitor.trend_points.length - 1, 1)) * plotWidth;
+      const y = plot.top + ((max - point.price) / span) * plotHeight;
       return { ...point, x, y };
     });
+    const yTicks = [max, (max + min) / 2, min].map((price) => ({
+      price,
+      y: plot.top + ((max - price) / span) * plotHeight,
+    }));
+    const xTicks = points.filter((_, index) => index === 0 || index === Math.floor(points.length / 2) || index === points.length - 1);
     return {
       width,
       height,
@@ -1115,6 +1122,9 @@ function GoldWatch({ monitor, loadGold }: { monitor: GoldMonitor; loadGold: () =
       max,
       line: points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" "),
       points,
+      plot,
+      yTicks,
+      xTicks,
     };
   }, [monitor]);
 
@@ -1166,24 +1176,36 @@ function GoldWatch({ monitor, loadGold }: { monitor: GoldMonitor; loadGold: () =
         </div>
         <div className="gold-trend">
           <svg viewBox={`0 0 ${trend.width} ${trend.height}`} role="img" aria-label="民生积存金实时走势线">
-            <line x1="24" x2="696" y1="24" y2="24" />
-            <line x1="24" x2="696" y1="110" y2="110" />
-            <line x1="24" x2="696" y1="196" y2="196" />
-            <polyline points={trend.line} />
+            {trend.yTicks.map((tick) => (
+              <g key={tick.price}>
+                <line className="trend-grid" x1={trend.plot.left} x2={trend.width - trend.plot.right} y1={tick.y} y2={tick.y} />
+                <text className="trend-y-label" x={8} y={tick.y + 4}>{tick.price.toFixed(2)}</text>
+              </g>
+            ))}
+            <line className="trend-axis" x1={trend.plot.left} x2={trend.width - trend.plot.right} y1={trend.height - trend.plot.bottom} y2={trend.height - trend.plot.bottom} />
+            {trend.xTicks.map((tick) => (
+              <text className="trend-x-label" key={tick.time} x={tick.x} y={trend.height - 12}>{tick.time}</text>
+            ))}
+            <polyline className="trend-line" points={trend.line} />
             {trend.points.map((point) => (
-              <circle key={`${point.time}-${point.price}`} cx={point.x} cy={point.y} r={point.time === "18:31" ? 5 : 3} />
+              <g
+                className="trend-point"
+                key={`${point.time}-${point.price}`}
+              >
+                <circle className="trend-hit" cx={point.x} cy={point.y} r={14} />
+                <circle className="trend-dot" cx={point.x} cy={point.y} r={point.time === "18:31" ? 5 : 3.5} />
+                <g
+                  className="trend-point-tooltip-svg"
+                  transform={`translate(${point.x > trend.width - 140 ? point.x - 118 : point.x + 12}, ${point.y < 60 ? point.y + 16 : point.y - 50})`}
+                >
+                  <rect width="106" height="40" rx="7" />
+                  <text x="10" y="16">{point.time}</text>
+                  <text x="10" y="31">¥{point.price.toFixed(2)}/克</text>
+                </g>
+                <title>{`${point.time} · ¥${point.price.toFixed(2)}/克`}</title>
+              </g>
             ))}
           </svg>
-          <div className="gold-trend-labels">
-            <span>高 {trend.max.toFixed(2)}</span>
-            <span>现 {monitor.live_price.toFixed(2)}</span>
-            <span>低 {trend.min.toFixed(2)}</span>
-          </div>
-          <div className="gold-trend-times">
-            <span>{monitor.trend_points[0]?.time}</span>
-            <span>{monitor.trend_points[Math.floor(monitor.trend_points.length / 2)]?.time}</span>
-            <span>{monitor.trend_points[monitor.trend_points.length - 1]?.time}</span>
-          </div>
         </div>
       </section>
 
