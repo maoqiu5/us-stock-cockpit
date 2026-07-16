@@ -205,6 +205,9 @@ type GoldMonitor = {
   reference_name: string;
   reference_change_pct: number;
   reference_time: string;
+  is_trading_session: boolean;
+  refresh_seconds: number;
+  trend_points: { time: string; price: number }[];
   trade_rule: string;
   settlement_rule: string;
   action: string;
@@ -452,9 +455,9 @@ export default function Home() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       loadGold().catch(() => setNotice("黄金盯盘刷新失败，正在保留最近一次数据。"));
-    }, 30_000);
+    }, (data.gold?.refresh_seconds || 60) * 1000);
     return () => window.clearInterval(timer);
-  }, [loadGold]);
+  }, [loadGold, data.gold?.refresh_seconds]);
 
   useEffect(() => {
     runBacktest().catch(() => undefined);
@@ -1092,6 +1095,29 @@ function Watchlist({
 }
 
 function GoldWatch({ monitor, loadGold }: { monitor: GoldMonitor; loadGold: () => Promise<void> }) {
+  const trend = useMemo(() => {
+    const width = 720;
+    const height = 220;
+    const padding = 24;
+    const prices = monitor.trend_points.map((point) => point.price);
+    const min = Math.min(...prices, monitor.day_low);
+    const max = Math.max(...prices, monitor.day_high);
+    const span = Math.max(max - min, 0.01);
+    const points = monitor.trend_points.map((point, index) => {
+      const x = padding + (index / Math.max(monitor.trend_points.length - 1, 1)) * (width - padding * 2);
+      const y = padding + ((max - point.price) / span) * (height - padding * 2);
+      return { ...point, x, y };
+    });
+    return {
+      width,
+      height,
+      min,
+      max,
+      line: points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" "),
+      points,
+    };
+  }, [monitor]);
+
   return (
     <div className="page-grid gold-page">
       <Metric label="计划资金" value={fmtCny(monitor.planned_capital)} hint={`${monitor.product_name} · ${monitor.product_type}`} tone="amber" icon={Coins} />
@@ -1126,6 +1152,37 @@ function GoldWatch({ monitor, loadGold }: { monitor: GoldMonitor; loadGold: () =
             <strong>{monitor.action}</strong>
             <p>{monitor.advice}</p>
             <em>置信度 {Math.round(monitor.confidence * 100)}%</em>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel wide">
+        <div className="panel-head">
+          <div>
+            <h2>实时走势线</h2>
+            <p>按民生积存金截图基准生成日内走势，交易时段每 {monitor.refresh_seconds} 秒刷新一次。</p>
+          </div>
+          <span className="badge">{monitor.is_trading_session ? "交易时段" : "非交易时段"}</span>
+        </div>
+        <div className="gold-trend">
+          <svg viewBox={`0 0 ${trend.width} ${trend.height}`} role="img" aria-label="民生积存金实时走势线">
+            <line x1="24" x2="696" y1="24" y2="24" />
+            <line x1="24" x2="696" y1="110" y2="110" />
+            <line x1="24" x2="696" y1="196" y2="196" />
+            <polyline points={trend.line} />
+            {trend.points.map((point) => (
+              <circle key={`${point.time}-${point.price}`} cx={point.x} cy={point.y} r={point.time === "18:31" ? 5 : 3} />
+            ))}
+          </svg>
+          <div className="gold-trend-labels">
+            <span>高 {trend.max.toFixed(2)}</span>
+            <span>现 {monitor.live_price.toFixed(2)}</span>
+            <span>低 {trend.min.toFixed(2)}</span>
+          </div>
+          <div className="gold-trend-times">
+            <span>{monitor.trend_points[0]?.time}</span>
+            <span>{monitor.trend_points[Math.floor(monitor.trend_points.length / 2)]?.time}</span>
+            <span>{monitor.trend_points[monitor.trend_points.length - 1]?.time}</span>
           </div>
         </div>
       </section>

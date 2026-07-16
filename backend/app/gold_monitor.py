@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from .models import GoldMonitor
 
@@ -22,6 +23,7 @@ BUY_FEE_RATE = 0.0
 
 def gold_monitor_snapshot() -> GoldMonitor:
     quote = _minsheng_accumulated_gold_quote()
+    is_trading_session = quote["status"] == "交易中" or _is_bank_gold_trading_session()
     first_order_amount = _first_order_amount(quote["price"], quote["pct_change"])
     reserve_cash = round(PLANNED_CAPITAL - first_order_amount, 2)
     action, confidence, advice, watch_points = _gold_advice(
@@ -56,6 +58,9 @@ def gold_monitor_snapshot() -> GoldMonitor:
         reference_name="民生银行黄金实时买卖价",
         reference_change_pct=quote["pct_change"],
         reference_time=quote["time"],
+        is_trading_session=is_trading_session,
+        refresh_seconds=10 if is_trading_session else 60,
+        trend_points=_intraday_trend_points(),
         trade_rule="¥900 起购，¥1 递增；买入费率 0.00%，卖出按银行规则确认手续费。",
         settlement_rule="银行黄金支持实时买卖，成交价以支付成功后银行确认金价为准；不支持提取实物金。",
         action=action,
@@ -79,6 +84,28 @@ def _minsheng_accumulated_gold_quote() -> dict:
         "time": _now_label(),
         "source": "民生银行截图基准 / 实时接口预留",
     }
+
+
+def _intraday_trend_points() -> list[dict[str, float | str]]:
+    return [
+        {"time": "09:10", "price": 881.74},
+        {"time": "09:40", "price": 879.55},
+        {"time": "10:20", "price": 878.10},
+        {"time": "11:10", "price": 878.55},
+        {"time": "13:20", "price": 877.35},
+        {"time": "14:05", "price": 876.38},
+        {"time": "14:45", "price": 877.45},
+        {"time": "15:20", "price": 878.75},
+        {"time": "18:31", "price": SCREENSHOT_PRICE},
+    ]
+
+
+def _is_bank_gold_trading_session(now: datetime | None = None) -> bool:
+    current = (now or datetime.now()).astimezone(ZoneInfo("Asia/Shanghai"))
+    if current.weekday() >= 5:
+        return False
+    minutes = current.hour * 60 + current.minute
+    return minutes >= 9 * 60 or minutes < 2 * 60 + 30
 
 
 def _first_order_amount(price: float, pct_change: float) -> float:

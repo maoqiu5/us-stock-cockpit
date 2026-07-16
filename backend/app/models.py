@@ -68,6 +68,11 @@ class MarketQuote(BaseModel):
     updated_at: str
 
 
+class GoldTrendPoint(BaseModel):
+    time: str
+    price: float
+
+
 class GoldMonitor(BaseModel):
     product_code: str
     product_name: str
@@ -94,6 +99,9 @@ class GoldMonitor(BaseModel):
     reference_name: str
     reference_change_pct: float
     reference_time: str
+    is_trading_session: bool
+    refresh_seconds: int
+    trend_points: list[GoldTrendPoint]
     trade_rule: str
     settlement_rule: str
     action: str

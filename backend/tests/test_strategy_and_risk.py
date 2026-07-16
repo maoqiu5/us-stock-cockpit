@@ -136,6 +136,8 @@ def test_gold_monitor_tracks_minsheng_accumulated_gold_plan():
     assert snapshot.live_price == 878.20
     assert snapshot.estimated_grams > 11
     assert "¥900" in snapshot.trade_rule
+    assert snapshot.refresh_seconds == 10
+    assert len(snapshot.trend_points) >= 6
     assert snapshot.watch_points
 
 

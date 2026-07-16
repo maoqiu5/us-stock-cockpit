@@ -844,6 +844,62 @@ button:disabled {
   background: rgba(24, 210, 176, 0.1);
 }
 
+.gold-trend {
+  position: relative;
+  min-height: 292px;
+  padding: 16px 16px 42px;
+  border: 1px solid rgba(245, 195, 87, 0.22);
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgba(245, 195, 87, 0.08), rgba(7, 14, 22, 0.74)),
+    #07101a;
+}
+
+.gold-trend svg {
+  display: block;
+  width: 100%;
+  height: 240px;
+}
+
+.gold-trend line {
+  stroke: rgba(255,255,255,0.08);
+  stroke-width: 1;
+}
+
+.gold-trend polyline {
+  fill: none;
+  stroke: #d6a836;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 10px rgba(245, 195, 87, 0.22));
+}
+
+.gold-trend circle {
+  fill: #f5c357;
+  stroke: #2b1c04;
+  stroke-width: 2;
+}
+
+.gold-trend-labels,
+.gold-trend-times {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.gold-trend-labels {
+  top: 14px;
+}
+
+.gold-trend-times {
+  bottom: 16px;
+}
+
 .allocation-summary {
   display: flex;
   justify-content: space-between;
