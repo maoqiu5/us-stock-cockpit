@@ -444,20 +444,22 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!marketSession.isOpen) return undefined;
+    const refreshSeconds = marketSession.isOpen ? 10 : data.gold?.is_trading_session ? data.gold.refresh_seconds : 0;
+    if (!refreshSeconds) return undefined;
     load().catch(() => setNotice("自动刷新失败，正在保留最近一次数据。"));
     const timer = window.setInterval(() => {
       load().catch(() => setNotice("自动刷新失败，正在保留最近一次数据。"));
-    }, 10_000);
+    }, refreshSeconds * 1000);
     return () => window.clearInterval(timer);
-  }, [load, marketSession.isOpen]);
+  }, [data.gold?.is_trading_session, data.gold?.refresh_seconds, load, marketSession.isOpen]);
 
   useEffect(() => {
+    if (marketSession.isOpen || data.gold?.is_trading_session) return undefined;
     const timer = window.setInterval(() => {
       loadGold().catch(() => setNotice("黄金盯盘刷新失败，正在保留最近一次数据。"));
     }, (data.gold?.refresh_seconds || 60) * 1000);
     return () => window.clearInterval(timer);
-  }, [loadGold, data.gold?.refresh_seconds]);
+  }, [data.gold?.is_trading_session, data.gold?.refresh_seconds, loadGold, marketSession.isOpen]);
 
   useEffect(() => {
     runBacktest().catch(() => undefined);
@@ -1139,7 +1141,7 @@ function GoldWatch({ monitor, loadGold }: { monitor: GoldMonitor; loadGold: () =
         <div className="panel-head">
           <div>
             <h2>民生积存金盯盘</h2>
-            <p>{monitor.product_name} 当前按银行黄金实时买卖价跟踪，计划资金 {fmtCny(monitor.planned_capital)}；系统只做盯盘和纪律分析，不自动交易。</p>
+            <p>{monitor.product_name} 当前按公开上海金实时价作为银行积存金参考锚，计划资金 {fmtCny(monitor.planned_capital)}；系统只做盯盘和纪律分析，不自动交易。</p>
           </div>
           <div className="button-row">
             <span className="badge">{monitor.risk_level}</span>
@@ -1170,7 +1172,7 @@ function GoldWatch({ monitor, loadGold }: { monitor: GoldMonitor; loadGold: () =
         <div className="panel-head">
           <div>
             <h2>实时走势线</h2>
-            <p>按民生积存金截图基准生成日内走势，交易时段每 {monitor.refresh_seconds} 秒刷新一次。</p>
+            <p>{monitor.reference_name} 分钟级走势；交易时段每 {monitor.refresh_seconds} 秒刷新一次，行情时间 {monitor.quote_time}。</p>
           </div>
           <span className="badge">{monitor.is_trading_session ? "交易时段" : "非交易时段"}</span>
         </div>

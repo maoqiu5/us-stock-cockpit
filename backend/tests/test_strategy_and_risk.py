@@ -133,11 +133,12 @@ def test_gold_monitor_tracks_minsheng_accumulated_gold_plan():
     snapshot = gold_monitor_snapshot()
     assert snapshot.product_name == "民生积存金"
     assert snapshot.planned_capital == 10000
-    assert snapshot.live_price == 878.20
+    assert snapshot.live_price > 0
     assert snapshot.estimated_grams > 11
     assert "¥900" in snapshot.trade_rule
     assert snapshot.refresh_seconds == 10
-    assert len(snapshot.trend_points) >= 6
+    assert len(snapshot.trend_points) >= 20
+    assert snapshot.reference_symbol in {"SGE_AU9999", "CMBC_BANK_GOLD"}
     assert snapshot.watch_points
 
 

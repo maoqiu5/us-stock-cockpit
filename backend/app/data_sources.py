@@ -47,10 +47,10 @@ def data_source_statuses() -> list[DataSourceStatus]:
         DataSourceStatus(
             id="minsheng-gold",
             name="民生积存金",
-            purpose="民生银行黄金实时买卖价盯盘",
+            purpose="民生/浙商/工银积存金参考盯盘",
             configured=True,
-            status="manual",
-            detail="第一版使用民生银行截图价作为本地基准，并预留银行黄金实时接口适配器。",
+            status="active",
+            detail="优先使用 AKShare 上海金 Au99.99 分钟行情，备用新浪 SGE_AU9999；银行 App 专属买卖价后续可接适配器。",
         ),
     ]
 
