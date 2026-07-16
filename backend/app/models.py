@@ -113,15 +113,30 @@ class BrokerImportResult(BaseModel):
 
 
 class USmartScreenshotImportRequest(BaseModel):
+    broker: Literal["za-bank", "usmart"] = "usmart"
     image_path: str = ""
     extracted_text: str = ""
     as_of: str = ""
 
 
 class USmartScreenshotImportResult(BaseModel):
-    broker: Literal["usmart"] = "usmart"
+    broker: Literal["za-bank", "usmart"]
     image_path: str
     net_asset: float
+    imported_holdings: int
+    warnings: list[str]
+    holdings: list[Holding]
+
+
+class ZABankScreenshotImportRequest(BaseModel):
+    image_path: str = ""
+    extracted_text: str = ""
+    as_of: str = ""
+
+
+class ZABankScreenshotImportResult(BaseModel):
+    broker: Literal["za-bank"] = "za-bank"
+    image_path: str
     imported_holdings: int
     warnings: list[str]
     holdings: list[Holding]

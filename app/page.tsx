@@ -20,6 +20,8 @@ import { useEffect, useMemo, useState } from "react";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 const USMART_SCREENSHOT_PATH =
   "/Users/brian/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_5oxgvzo5wkcv21_448a/temp/RWTemp/2026-07/b3cb3351d259bd6f77573a1d380b26e0.jpg";
+const ZA_SCREENSHOT_PATH =
+  "/Users/brian/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_5oxgvzo5wkcv21_448a/temp/RWTemp/2026-07/4ce6a65a5e65b7986b40f0da36549bc8.jpg";
 
 type DashboardSummary = {
   account_total: number;
@@ -162,6 +164,14 @@ type USmartScreenshotResult = {
   broker: "usmart";
   image_path: string;
   net_asset: number;
+  imported_holdings: number;
+  warnings: string[];
+  holdings: Holding[];
+};
+
+type ZABankScreenshotResult = {
+  broker: "za-bank";
+  image_path: string;
   imported_holdings: number;
   warnings: string[];
   holdings: Holding[];
@@ -371,6 +381,19 @@ export default function Home() {
     setNotice(`已从 uSMART 截图导入 ${result.imported_holdings} 条持仓，净资产 ${fmtMoney(result.net_asset)}。`);
   }
 
+  async function importZaScreenshot() {
+    const result = await fetchJson<ZABankScreenshotResult>("/imports/za-screenshot", {
+      method: "POST",
+      body: JSON.stringify({
+        image_path: ZA_SCREENSHOT_PATH,
+        as_of: "07/16 14:04"
+      })
+    });
+    await load();
+    setActive("discipline");
+    setNotice(`已从 ZA Bank 截图导入 ${result.imported_holdings} 条持仓。`);
+  }
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -443,6 +466,7 @@ export default function Home() {
             recordZaManualExecution={recordZaManualExecution}
             importSampleBrokerRecord={importSampleBrokerRecord}
             importUsmartScreenshot={importUsmartScreenshot}
+            importZaScreenshot={importZaScreenshot}
           />
         )}
         {active === "analysis" && (
@@ -723,7 +747,8 @@ function Discipline({
   holdings,
   recordZaManualExecution,
   importSampleBrokerRecord,
-  importUsmartScreenshot
+  importUsmartScreenshot,
+  importZaScreenshot
 }: {
   events: DisciplineEvent[];
   orders: Order[];
@@ -731,6 +756,7 @@ function Discipline({
   recordZaManualExecution: () => Promise<void>;
   importSampleBrokerRecord: () => Promise<void>;
   importUsmartScreenshot: () => Promise<void>;
+  importZaScreenshot: () => Promise<void>;
 }) {
   return (
     <div className="page-grid">
@@ -780,6 +806,7 @@ function Discipline({
             <p>ZA Bank 和 uSMART 当前走结单、截图、CSV 或手工记录导入，系统统一生成本地持仓和 PnL。</p>
           </div>
           <div className="button-row">
+            <button onClick={importZaScreenshot}>导入 ZA 截图</button>
             <button onClick={importUsmartScreenshot}>导入 uSMART 截图</button>
             <button onClick={importSampleBrokerRecord}>导入样例记录</button>
           </div>

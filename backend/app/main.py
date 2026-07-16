@@ -5,11 +5,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .broker import USmartBrokerAdapter, broker_capabilities, broker_from_env, execution_config
 from .data_sources import data_source_statuses, market_quotes
-from .models import BacktestRequest, BrokerImportRequest, BrokerImportResult, Holding, ManualExecutionRequest, OrderRequest, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult
+from .models import BacktestRequest, BrokerImportRequest, BrokerImportResult, Holding, ManualExecutionRequest, OrderRequest, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, ZABankScreenshotImportRequest, ZABankScreenshotImportResult
 from .risk import RiskConfig, RiskEngine
 from .seed import EVENTS, HOLDINGS, ORDERS, STRATEGIES, WATCHLIST
 from .strategy import generate_signal, run_backtest
 from .usmart_importer import parse_usmart_portfolio_screenshot
+from .za_importer import parse_za_bank_portfolio_screenshot
 
 app = FastAPI(title="美股驾驶舱 API", version="0.1.0")
 
@@ -234,6 +235,7 @@ def import_usmart_screenshot(request: USmartScreenshotImportRequest) -> USmartSc
         image_path=request.image_path,
         extracted_text=request.extracted_text,
         as_of=request.as_of,
+        broker=request.broker,
     )
     for parsed in parsed_holdings:
         existing = next((item for item in HOLDINGS if item.broker == parsed.broker and item.ticker == parsed.ticker), None)
@@ -247,8 +249,35 @@ def import_usmart_screenshot(request: USmartScreenshotImportRequest) -> USmartSc
         else:
             HOLDINGS.append(parsed)
     return USmartScreenshotImportResult(
+        broker=request.broker,
         image_path=request.image_path,
         net_asset=net_asset,
+        imported_holdings=len(parsed_holdings),
+        warnings=warnings,
+        holdings=parsed_holdings,
+    )
+
+
+@app.post("/imports/za-screenshot")
+def import_za_screenshot(request: ZABankScreenshotImportRequest) -> ZABankScreenshotImportResult:
+    parsed_holdings, warnings = parse_za_bank_portfolio_screenshot(
+        image_path=request.image_path,
+        extracted_text=request.extracted_text,
+        as_of=request.as_of,
+    )
+    for parsed in parsed_holdings:
+        existing = next((item for item in HOLDINGS if item.broker == parsed.broker and item.ticker == parsed.ticker), None)
+        if existing:
+            existing.qty = parsed.qty
+            existing.avg_cost = parsed.avg_cost
+            existing.market_price = parsed.market_price
+            existing.market_value = parsed.market_value
+            existing.pnl = parsed.pnl
+            existing.updated_at = parsed.updated_at
+        else:
+            HOLDINGS.append(parsed)
+    return ZABankScreenshotImportResult(
+        image_path=request.image_path,
         imported_holdings=len(parsed_holdings),
         warnings=warnings,
         holdings=parsed_holdings,

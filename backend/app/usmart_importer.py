@@ -7,14 +7,19 @@ from datetime import datetime
 from .models import Holding
 
 
-def parse_usmart_portfolio_screenshot(image_path: str = "", extracted_text: str = "", as_of: str = "") -> tuple[float, list[Holding], list[str]]:
+def parse_usmart_portfolio_screenshot(
+    image_path: str = "",
+    extracted_text: str = "",
+    as_of: str = "",
+    broker: str = "usmart",
+) -> tuple[float, list[Holding], list[str]]:
     warnings: list[str] = []
     timestamp = as_of or datetime.utcnow().strftime("%m/%d %H:%M")
     if image_path and not os.path.exists(image_path):
         warnings.append("IMAGE_PATH_NOT_FOUND")
 
     if extracted_text.strip():
-        parsed = _parse_text(extracted_text, timestamp)
+        parsed = _parse_text(extracted_text, timestamp, broker)
         if parsed[1]:
             return parsed
         warnings.append("TEXT_PARSE_FALLBACK_TO_TEMPLATE")
@@ -43,11 +48,13 @@ def parse_usmart_portfolio_screenshot(image_path: str = "", extracted_text: str 
             updated_at=timestamp,
         ),
     ]
+    for holding in holdings:
+        holding.broker = broker  # type: ignore[assignment]
     warnings.append("TEMPLATE_V1_USED")
     return 1784.16, holdings, warnings
 
 
-def _parse_text(text: str, timestamp: str) -> tuple[float, list[Holding], list[str]]:
+def _parse_text(text: str, timestamp: str, broker: str) -> tuple[float, list[Holding], list[str]]:
     warnings: list[str] = []
     net_asset = _number_after(text, r"资产净值|净资产")
     holdings: list[Holding] = []
@@ -73,6 +80,7 @@ def _parse_text(text: str, timestamp: str) -> tuple[float, list[Holding], list[s
                 updated_at=timestamp,
             )
         )
+        holdings[-1].broker = broker  # type: ignore[assignment]
     return net_asset or 0, holdings, warnings
 
 

@@ -68,6 +68,14 @@ curl -X POST http://127.0.0.1:8000/imports/usmart-screenshot \
   -d '{"image_path":"/absolute/path/to/usmart_position.jpg","as_of":"07/16 14:02"}'
 ```
 
+导入 ZA Bank 持仓截图：
+
+```bash
+curl -X POST http://127.0.0.1:8000/imports/za-screenshot \
+  -H 'Content-Type: application/json' \
+  -d '{"image_path":"/absolute/path/to/za_position.jpg","as_of":"07/16 14:04"}'
+```
+
 导入券商记录：
 
 ```bash
