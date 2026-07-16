@@ -185,7 +185,7 @@ class BacktestResult(BaseModel):
 class BacktestRequest(BaseModel):
     ticker: str = "NOK.US"
     start_date: str = "2026-05-01"
-    end_date: str = "2026-06-22"
+    end_date: str = "2026-07-16"
     mode: Literal["offline", "backtest", "paper"] = "offline"
 
 

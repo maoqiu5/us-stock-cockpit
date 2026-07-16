@@ -349,7 +349,7 @@ export default function Home() {
       body: JSON.stringify({
         ticker: selectedTicker,
         start_date: "2026-05-01",
-        end_date: "2026-06-22",
+        end_date: "2026-07-16",
         mode: analysisType
       })
     });
@@ -929,7 +929,7 @@ function Analysis(props: {
             </select>
           </label>
           <label>开始日期<input value="2026-05-01" readOnly /></label>
-          <label>结束日期<input value="2026-06-22" readOnly /></label>
+          <label>结束日期<input value="2026-07-16" readOnly /></label>
           <button className="primary" onClick={props.runBacktest}>运行评测</button>
           <button onClick={props.importPreviousCloseAndBacktest}>导入昨收并评测</button>
         </div>
