@@ -9,6 +9,8 @@
 - 风控引擎：单票 5%、总仓 50%、日亏 2%、周亏 6%、暂停自动执行。
 - 券商适配层：`PaperBrokerAdapter`、`USmartBrokerAdapter` 和 `IBKRBrokerAdapter`。
 - 实盘保护：任何 live 模式必须显式设置 `ENABLE_LIVE_TRADING=true`，订单仍会先经过风控。
+- uSMART 请求预演：`POST /orders/preview` 会生成官方字段、请求头、签名状态和阻断原因。
+- ZA Bank 手工执行记录：`POST /manual-executions` 用于把 ZA App 内确认的成交写回纪律日志。
 
 ## 本地启动
 
@@ -40,7 +42,7 @@ npm run dev
 
 ### uSMART / 香港盈立
 
-先向 uSMART 申请 Open API。代码中已经保留官方下单字段映射，但真实网络下单会在 RSA 签名、渠道号和 token 全部配置完成前返回阻断状态。
+先向 uSMART 申请 Open API。官方文档说明请求头需要 `Authorization`、`X-Channel`、`X-Time`、`X-Request-Id`、`X-Sign`，`X-Sign` 使用 MD5withRSA 后做 URL-safe base64。代码已经实现请求体映射和签名头生成；真实网络提交默认仍关闭。
 
 ```bash
 BROKER_MODE=usmart-paper
@@ -48,7 +50,8 @@ USMART_BASE_URL=http://open-jy-uat.yxzq.com
 USMART_CHANNEL=你的渠道号
 USMART_AUTHORIZATION=你的token
 USMART_PRIVATE_KEY_PATH=/absolute/path/to/private_key.pem
-USMART_SIGNING_READY=false
+USMART_ORDER_PATH=/stock-trade/entrust
+USMART_ALLOW_NETWORK_SUBMIT=false
 ```
 
 Live trading 需要额外设置：
@@ -57,12 +60,28 @@ Live trading 需要额外设置：
 BROKER_MODE=usmart-live
 USMART_BASE_URL=https://open-jy.yxzq.com
 ENABLE_LIVE_TRADING=true
-USMART_SIGNING_READY=true
+USMART_ALLOW_NETWORK_SUBMIT=true
+```
+
+在真实提交前，先用预演接口检查请求：
+
+```bash
+curl -X POST http://127.0.0.1:8000/orders/preview \
+  -H 'Content-Type: application/json' \
+  -d '{"ticker":"META","side":"BUY","qty":1,"order_type":"LMT","limit_price":712.4,"dry_run":false}'
 ```
 
 ### ZA Bank / 众安
 
 当前版本把 ZA Bank 标记为 `za-manual`：系统生成信号、风控建议、限价单参数和纪律记录，你在 ZA App 内人工确认下单。除非 ZA Bank 官方提供投资交易 API，否则不做 App 自动点击或非公开接口。
+
+记录 ZA App 手工成交：
+
+```bash
+curl -X POST http://127.0.0.1:8000/manual-executions \
+  -H 'Content-Type: application/json' \
+  -d '{"broker":"za-bank","ticker":"META","side":"BUY","qty":1,"price":712.4,"executed_at":"07/06 15:10","note":"ZA Bank App 手工确认"}'
+```
 
 ### IBKR 备用
 

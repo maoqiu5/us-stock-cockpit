@@ -56,6 +56,16 @@ class TradeOrder(BaseModel):
     created_at: str
 
 
+class PreparedBrokerRequest(BaseModel):
+    broker: str
+    url: str
+    method: str
+    headers: dict[str, str]
+    body: dict[str, Union[str, int, float, bool]]
+    ready_to_submit: bool
+    blockers: list[str]
+
+
 class BacktestPoint(BaseModel):
     date: str
     equity: float
@@ -113,6 +123,16 @@ class OrderRequest(BaseModel):
     limit_price: float = Field(gt=0)
     strategy_id: str = "pe_v1"
     dry_run: bool = True
+
+
+class ManualExecutionRequest(BaseModel):
+    broker: Literal["za-bank", "usmart", "ibkr", "other"] = "za-bank"
+    ticker: str
+    side: Side
+    qty: int = Field(gt=0)
+    price: float = Field(gt=0)
+    executed_at: str
+    note: str = ""
 
 
 class BrokerCapability(BaseModel):

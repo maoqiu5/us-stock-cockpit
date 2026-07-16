@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import os
 import time
+import json
+import base64
 from abc import ABC, abstractmethod
 from datetime import datetime
 from uuid import uuid4
+from typing import Union
 
-from .models import BrokerCapability, ExecutionConfig, OrderRequest, Side, TradeOrder
+import httpx
+
+from .models import BrokerCapability, ExecutionConfig, OrderRequest, PreparedBrokerRequest, Side, TradeOrder
 
 
 class BrokerAdapter(ABC):
@@ -40,25 +45,59 @@ class USmartBrokerAdapter(BrokerAdapter):
         self.channel = os.getenv("USMART_CHANNEL", "")
         self.authorization = os.getenv("USMART_AUTHORIZATION", "")
         self.private_key_path = os.getenv("USMART_PRIVATE_KEY_PATH", "")
+        self.order_path = os.getenv("USMART_ORDER_PATH", "/stock-trade/entrust")
 
     def place_order(self, request: OrderRequest) -> TradeOrder:
         if self.live and os.getenv("ENABLE_LIVE_TRADING") != "true":
             return self._blocked(request, "LIVE_DISABLED")
         if request.dry_run:
             return self._blocked(request, "DRY_RUN")
-        if not self.channel or not self.authorization or not self.private_key_path:
-            return self._blocked(request, "USMART_CREDENTIALS_MISSING")
 
-        payload = self._entrust_payload(request)
-        # The official API requires RSA X-Sign over the body. We keep the real
-        # order shape here, but block network submission until signing is wired
-        # with the user's issued channel keys.
-        if os.getenv("USMART_SIGNING_READY") != "true":
-            return self._blocked(request, f"USMART_SIGNING_NOT_CONFIGURED:{payload['serialNo']}")
+        prepared = self.prepare_order(request)
+        if not prepared.ready_to_submit:
+            return self._blocked(request, "USMART_" + "_".join(prepared.blockers))
+        if os.getenv("USMART_ALLOW_NETWORK_SUBMIT") != "true":
+            return self._blocked(request, "USMART_NETWORK_SUBMIT_DISABLED")
 
-        return self._blocked(request, "USMART_NETWORK_CLIENT_PENDING")
+        try:
+            response = httpx.post(prepared.url, headers=prepared.headers, json=prepared.body, timeout=10)
+            body = response.json()
+        except Exception as exc:
+            return self._blocked(request, f"USMART_HTTP_ERROR:{exc.__class__.__name__}")
 
-    def _entrust_payload(self, request: OrderRequest) -> dict[str, str | int | float | bool]:
+        if response.status_code >= 400 or body.get("code") not in {0, "0", None}:
+            return self._blocked(request, f"USMART_REJECTED:{body.get('msg', response.status_code)}")
+
+        data = body.get("data") or {}
+        return TradeOrder(
+            id=f"usmart_{data.get('entrustId', uuid4().hex[:8])}",
+            broker="usmart-live" if self.live else "usmart-paper",
+            ticker=request.ticker,
+            side=request.side,
+            qty=request.qty,
+            order_type=request.order_type,
+            limit_price=request.limit_price,
+            status=str(data.get("statusName") or data.get("status") or "SUBMITTED"),
+            created_at=datetime.utcnow().strftime("%m/%d %H:%M"),
+        )
+
+    def prepare_order(self, request: OrderRequest) -> PreparedBrokerRequest:
+        body = self._entrust_payload(request)
+        blockers = self._credential_blockers()
+        headers = self._headers(body) if not blockers else self._unsigned_headers()
+        if self.live and os.getenv("ENABLE_LIVE_TRADING") != "true":
+            blockers.append("LIVE_DISABLED")
+        return PreparedBrokerRequest(
+            broker="usmart-live" if self.live else "usmart-paper",
+            url=f"{self.base_url.rstrip('/')}{self.order_path}",
+            method="POST",
+            headers=headers,
+            body=body,
+            ready_to_submit=not blockers,
+            blockers=blockers,
+        )
+
+    def _entrust_payload(self, request: OrderRequest) -> dict[str, Union[str, int, float, bool]]:
         return {
             "serialNo": int(time.time() * 1000),
             "entrustAmount": request.qty,
@@ -69,6 +108,55 @@ class USmartBrokerAdapter(BrokerAdapter):
             "stockCode": request.ticker,
             "forceEntrustFlag": False,
         }
+
+    def _headers(self, body: dict[str, Union[str, int, float, bool]]) -> dict[str, str]:
+        request_id = str(int(time.time() * 1000000)).ljust(30, "0")[:30]
+        timestamp = str(int(time.time() * 1000))
+        body_text = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+        row_content = "".join([self.authorization, self.channel, "1", request_id, timestamp, body_text])
+        return {
+            "Authorization": self.authorization,
+            "Content-Type": "application/json;charset=UTF-8",
+            "X-Lang": "1",
+            "X-Channel": self.channel,
+            "X-Time": timestamp,
+            "X-Request-Id": request_id,
+            "X-Dt": "t5",
+            "X-Sign": self._sign(row_content),
+        }
+
+    def _unsigned_headers(self) -> dict[str, str]:
+        return {
+            "Authorization": "***" if self.authorization else "",
+            "Content-Type": "application/json;charset=UTF-8",
+            "X-Lang": "1",
+            "X-Channel": self.channel,
+            "X-Time": "",
+            "X-Request-Id": "",
+            "X-Dt": "t5",
+            "X-Sign": "",
+        }
+
+    def _credential_blockers(self) -> list[str]:
+        blockers = []
+        if not self.channel:
+            blockers.append("CHANNEL_MISSING")
+        if not self.authorization:
+            blockers.append("AUTHORIZATION_MISSING")
+        if not self.private_key_path:
+            blockers.append("PRIVATE_KEY_PATH_MISSING")
+        elif not os.path.exists(self.private_key_path):
+            blockers.append("PRIVATE_KEY_NOT_FOUND")
+        return blockers
+
+    def _sign(self, row_content: str) -> str:
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding
+
+        with open(self.private_key_path, "rb") as key_file:
+            private_key = serialization.load_pem_private_key(key_file.read(), password=None)
+        signature = private_key.sign(row_content.encode("utf-8"), padding.PKCS1v15(), hashes.MD5())
+        return base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
 
     def _blocked(self, request: OrderRequest, status: str) -> TradeOrder:
         return TradeOrder(

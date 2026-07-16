@@ -469,6 +469,56 @@ h2 {
   line-height: 1.7;
 }
 
+.execution-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.execution-panel > div,
+.prepared-order {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.execution-panel span,
+.prepared-order span {
+  display: block;
+  margin-top: 7px;
+  color: var(--green);
+  font-size: 12px;
+}
+
+.execution-panel p {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+code {
+  display: block;
+  margin-top: 10px;
+  color: #cbd7e2;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+pre {
+  max-height: 160px;
+  margin: 10px 0 0;
+  padding: 12px;
+  overflow: auto;
+  border-radius: 6px;
+  background: #050910;
+  color: #b7c8d6;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 em {
   color: var(--green);
   font-style: normal;
@@ -653,6 +703,7 @@ select, input {
   .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .analysis-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .broker-grid { grid-template-columns: 1fr; }
+  .execution-panel { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {

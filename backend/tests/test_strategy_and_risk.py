@@ -1,4 +1,5 @@
 from backend.app.models import OrderRequest, Side
+from backend.app.broker import USmartBrokerAdapter
 from backend.app.risk import RiskConfig, RiskEngine
 from backend.app.seed import WATCHLIST
 from backend.app.strategy import generate_signal, run_backtest, score_watchlist_item
@@ -41,3 +42,12 @@ def test_risk_blocks_when_automation_paused():
     decision = engine.evaluate_order(request)
     assert not decision.allowed
     assert "暂停" in decision.blocked_reason
+
+
+def test_usmart_prepare_order_blocks_without_credentials():
+    adapter = USmartBrokerAdapter(live=False)
+    request = OrderRequest(ticker="META", side=Side.buy, qty=1, limit_price=712.4)
+    prepared = adapter.prepare_order(request)
+    assert prepared.body["exchangeType"] == 5
+    assert prepared.body["entrustType"] == 0
+    assert "CHANNEL_MISSING" in prepared.blockers

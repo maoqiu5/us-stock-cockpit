@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from .broker import broker_capabilities, broker_from_env, execution_config
-from .models import BacktestRequest, OrderRequest, Signal, TradeOrder
+from .broker import USmartBrokerAdapter, broker_capabilities, broker_from_env, execution_config
+from .models import BacktestRequest, ManualExecutionRequest, OrderRequest, Signal, TradeOrder
 from .risk import RiskConfig, RiskEngine
 from .seed import EVENTS, ORDERS, STRATEGIES, WATCHLIST
 from .strategy import generate_signal, run_backtest
@@ -122,6 +122,37 @@ def submit_order(request: OrderRequest) -> TradeOrder:
             created_at="now",
         )
     order = broker_from_env().place_order(request)
+    ORDERS.insert(0, order)
+    return order
+
+
+@app.post("/orders/preview")
+def preview_order(request: OrderRequest, target: str = Query(default="")):
+    mode = target or execution_config().mode
+    if mode in {"usmart-paper", "usmart-live"}:
+        return USmartBrokerAdapter(live=mode == "usmart-live").prepare_order(request)
+    decision = risk_engine().evaluate_order(request)
+    return {
+        "broker": mode,
+        "ready_to_submit": decision.allowed,
+        "blockers": [] if decision.allowed else [decision.blocked_reason],
+        "body": request.model_dump(),
+    }
+
+
+@app.post("/manual-executions")
+def create_manual_execution(request: ManualExecutionRequest) -> TradeOrder:
+    order = TradeOrder(
+        id=f"manual_{request.broker}_{len(ORDERS) + 1}",
+        broker=request.broker,
+        ticker=request.ticker,
+        side=request.side,
+        qty=request.qty,
+        order_type="MANUAL",
+        limit_price=request.price,
+        status=f"MANUAL_RECORDED: {request.note or 'user confirmed in broker app'}",
+        created_at=request.executed_at,
+    )
     ORDERS.insert(0, order)
     return order
 

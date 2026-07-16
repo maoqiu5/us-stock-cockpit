@@ -105,6 +105,24 @@ type BrokerCapability = {
   notes: string[];
 };
 
+type ExecutionConfig = {
+  mode: string;
+  live_trading_enabled: boolean;
+  usmart_base_url: string;
+  usmart_channel: string;
+  notes: string[];
+};
+
+type PreparedOrder = {
+  broker: string;
+  url?: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: Record<string, string | number | boolean>;
+  ready_to_submit: boolean;
+  blockers: string[];
+};
+
 type BacktestResult = {
   strategy_id: string;
   ticker: string;
@@ -126,6 +144,7 @@ type AppData = {
   orders: Order[];
   risk: RiskStatus | null;
   brokers: BrokerCapability[];
+  execution: ExecutionConfig | null;
 };
 
 const nav = [
@@ -160,26 +179,29 @@ export default function Home() {
     events: [],
     orders: [],
     risk: null,
-    brokers: []
+    brokers: [],
+    execution: null
   });
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
   const [selectedStrategy, setSelectedStrategy] = useState("pe_v1");
   const [selectedTicker, setSelectedTicker] = useState("META");
   const [analysisType, setAnalysisType] = useState("offline");
+  const [preparedOrder, setPreparedOrder] = useState<PreparedOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
 
   const load = async () => {
-    const [summary, strategies, watchlist, events, orders, risk, brokers] = await Promise.all([
+    const [summary, strategies, watchlist, events, orders, risk, brokers, execution] = await Promise.all([
       fetchJson<DashboardSummary>("/dashboard/summary"),
       fetchJson<StrategyModel[]>("/strategies"),
       fetchJson<WatchlistItem[]>("/watchlist"),
       fetchJson<DisciplineEvent[]>("/discipline/events"),
       fetchJson<Order[]>("/orders"),
       fetchJson<RiskStatus>("/risk/status"),
-      fetchJson<BrokerCapability[]>("/brokers/capabilities")
+      fetchJson<BrokerCapability[]>("/brokers/capabilities"),
+      fetchJson<ExecutionConfig>("/execution/config")
     ]);
-    setData({ summary, strategies, watchlist, events, orders, risk, brokers });
+    setData({ summary, strategies, watchlist, events, orders, risk, brokers, execution });
     setLoading(false);
   };
 
@@ -215,6 +237,40 @@ export default function Home() {
   async function toggleAutomation(paused: boolean) {
     await fetchJson(paused ? "/automation/resume" : "/automation/pause", { method: "POST" });
     await load();
+  }
+
+  async function previewUsmartOrder() {
+    const result = await fetchJson<PreparedOrder>("/orders/preview?target=usmart-paper", {
+      method: "POST",
+      body: JSON.stringify({
+        ticker: selectedTicker,
+        side: "BUY",
+        qty: 1,
+        order_type: "LMT",
+        limit_price: selectedTicker === "META" ? 712.4 : 100,
+        strategy_id: selectedStrategy,
+        dry_run: false
+      })
+    });
+    setPreparedOrder(result);
+    setActive("dashboard");
+  }
+
+  async function recordZaManualExecution() {
+    await fetchJson<Order>("/manual-executions", {
+      method: "POST",
+      body: JSON.stringify({
+        broker: "za-bank",
+        ticker: selectedTicker,
+        side: "BUY",
+        qty: 1,
+        price: selectedTicker === "META" ? 712.4 : 100,
+        executed_at: "07/06 15:10",
+        note: "ZA Bank App 手工确认"
+      })
+    });
+    await load();
+    setNotice("已记录一笔 ZA Bank 手工成交。");
   }
 
   return (
@@ -268,11 +324,19 @@ export default function Home() {
         {loading ? <div className="loading">正在加载驾驶舱...</div> : null}
 
         {active === "dashboard" && data.summary && (
-          <Dashboard summary={data.summary} risk={data.risk} orders={data.orders} brokers={data.brokers} />
+          <Dashboard
+            summary={data.summary}
+            risk={data.risk}
+            orders={data.orders}
+            brokers={data.brokers}
+            execution={data.execution}
+            preparedOrder={preparedOrder}
+            previewUsmartOrder={previewUsmartOrder}
+          />
         )}
         {active === "strategies" && <Strategies strategies={data.strategies} />}
         {active === "watchlist" && <Watchlist items={data.watchlist} />}
-        {active === "discipline" && <Discipline events={data.events} orders={data.orders} />}
+        {active === "discipline" && <Discipline events={data.events} orders={data.orders} recordZaManualExecution={recordZaManualExecution} />}
         {active === "analysis" && (
           <Analysis
             strategies={data.strategies}
@@ -304,7 +368,23 @@ function Metric({ label, value, hint, tone = "normal", icon: Icon }: { label: st
   );
 }
 
-function Dashboard({ summary, risk, orders, brokers }: { summary: DashboardSummary; risk: RiskStatus | null; orders: Order[]; brokers: BrokerCapability[] }) {
+function Dashboard({
+  summary,
+  risk,
+  orders,
+  brokers,
+  execution,
+  preparedOrder,
+  previewUsmartOrder
+}: {
+  summary: DashboardSummary;
+  risk: RiskStatus | null;
+  orders: Order[];
+  brokers: BrokerCapability[];
+  execution: ExecutionConfig | null;
+  preparedOrder: PreparedOrder | null;
+  previewUsmartOrder: () => Promise<void>;
+}) {
   return (
     <div className="page-grid">
       <Metric label="账户总额" value={fmtMoney(summary.account_total)} hint={`${fmtMoney(summary.today_pnl)} 今日`} tone="green" icon={WalletCards} />
@@ -386,7 +466,7 @@ function Dashboard({ summary, risk, orders, brokers }: { summary: DashboardSumma
             <h2>券商接入路径</h2>
             <p>按你现有账户优先：香港盈立负责自动化交易，ZA Bank 先做手工确认，IBKR 作为备用执行通道。</p>
           </div>
-          <span className="badge">uSMART 优先</span>
+          <button onClick={previewUsmartOrder}>预演 uSMART 订单</button>
         </div>
         <div className="broker-grid">
           {brokers.map((broker) => (
@@ -401,6 +481,21 @@ function Dashboard({ summary, risk, orders, brokers }: { summary: DashboardSumma
               </ul>
             </article>
           ))}
+        </div>
+        <div className="execution-panel">
+          <div>
+            <strong>当前执行模式</strong>
+            <span>{execution?.mode || "paper"} · {execution?.live_trading_enabled ? "live enabled" : "live locked"}</span>
+            <p>{execution?.notes?.[1] || "uSMART 需要渠道、token 和 RSA 签名后才能提交。"}</p>
+          </div>
+          {preparedOrder && (
+            <div className="prepared-order">
+              <strong>{preparedOrder.broker} 请求预演</strong>
+              <span>{preparedOrder.ready_to_submit ? "可提交" : `阻断：${preparedOrder.blockers.join(", ")}`}</span>
+              <code>{preparedOrder.method || "POST"} {preparedOrder.url || "/orders"}</code>
+              <pre>{JSON.stringify(preparedOrder.body, null, 2)}</pre>
+            </div>
+          )}
         </div>
       </section>
     </div>
@@ -465,7 +560,15 @@ function Watchlist({ items }: { items: WatchlistItem[] }) {
   );
 }
 
-function Discipline({ events, orders }: { events: DisciplineEvent[]; orders: Order[] }) {
+function Discipline({
+  events,
+  orders,
+  recordZaManualExecution
+}: {
+  events: DisciplineEvent[];
+  orders: Order[];
+  recordZaManualExecution: () => Promise<void>;
+}) {
   return (
     <div className="page-grid">
       <section className="panel wide">
@@ -490,7 +593,13 @@ function Discipline({ events, orders }: { events: DisciplineEvent[]; orders: Ord
         </div>
       </section>
       <section className="panel">
-        <h2>执行记录</h2>
+        <div className="panel-head">
+          <div>
+            <h2>执行记录</h2>
+            <p>ZA Bank 暂按手工确认，执行后在这里补记，后续可做对账。</p>
+          </div>
+          <button onClick={recordZaManualExecution}>记录 ZA 成交</button>
+        </div>
         <div className="compact-table">
           {orders.map((order) => (
             <div key={order.id}>
