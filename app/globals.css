@@ -768,6 +768,82 @@ button:disabled {
   padding: 0 12px;
 }
 
+.gold-hero {
+  border-color: rgba(245, 195, 87, 0.28);
+  background:
+    linear-gradient(180deg, rgba(39, 32, 15, 0.5), rgba(9, 16, 25, 0.96)),
+    linear-gradient(180deg, rgba(14, 21, 32, 0.96), rgba(9, 16, 25, 0.96));
+}
+
+.gold-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 14px;
+}
+
+.gold-position,
+.gold-advice {
+  min-height: 220px;
+  padding: 18px;
+  border: 1px solid rgba(245, 195, 87, 0.24);
+  border-radius: 7px;
+  background: rgba(7, 14, 22, 0.62);
+}
+
+.gold-position > span,
+.gold-advice > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.gold-position > strong {
+  display: block;
+  margin: 12px 0 18px;
+  color: var(--amber);
+  font-size: 34px;
+  line-height: 1;
+}
+
+.gold-position dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.gold-position dl div {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255,255,255,0.02);
+}
+
+.gold-position dd {
+  margin-top: 6px;
+  color: #f2d58a;
+}
+
+.gold-advice strong {
+  display: block;
+  margin-top: 12px;
+  color: var(--green);
+  font-size: 28px;
+}
+
+.gold-advice p {
+  margin-top: 14px;
+  color: #c3ced9;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.gold-advice em {
+  display: inline-block;
+  margin-top: 16px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  background: rgba(24, 210, 176, 0.1);
+}
+
 .allocation-summary {
   display: flex;
   justify-content: space-between;
@@ -875,6 +951,7 @@ select, input {
   .broker-grid { grid-template-columns: 1fr; }
   .source-grid, .quote-grid, .advice-grid { grid-template-columns: 1fr; }
   .execution-panel { grid-template-columns: 1fr; }
+  .gold-layout { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {
@@ -885,5 +962,6 @@ select, input {
   .strategy-card { grid-column: 1; }
   .flow, .analysis-form, .add-stock-row { grid-template-columns: 1fr; }
   .allocation-summary { flex-direction: column; }
+  .gold-position dl { grid-template-columns: 1fr; }
   table { display: block; overflow-x: auto; white-space: nowrap; }
 }

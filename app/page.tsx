@@ -5,6 +5,7 @@ import {
   BarChart3,
   Bot,
   CirclePause,
+  Coins,
   Database,
   Gauge,
   Layers3,
@@ -178,6 +179,38 @@ type ZABankScreenshotResult = {
   holdings: Holding[];
 };
 
+type GoldMonitor = {
+  fund_code: string;
+  fund_name: string;
+  risk_level: string;
+  currency: string;
+  current_value: number;
+  estimated_units: number;
+  cost_basis: number;
+  cost_nav: number;
+  latest_nav: number;
+  latest_nav_date: string;
+  estimated_nav: number;
+  estimated_change_pct: number;
+  estimated_time: string;
+  yesterday_pnl: number;
+  holding_pnl: number;
+  holding_pnl_rate: number;
+  cumulative_pnl: number;
+  reference_symbol: string;
+  reference_name: string;
+  reference_price: number;
+  reference_change_pct: number;
+  reference_time: string;
+  trade_rule: string;
+  settlement_rule: string;
+  action: string;
+  confidence: number;
+  advice: string;
+  watch_points: string[];
+  source: string;
+};
+
 type PreviousCloseImportResult = {
   as_of: string;
   source: string;
@@ -262,18 +295,23 @@ type AppData = {
   holdingAdvice: HoldingAdvice[];
   candidates: CandidateStock[];
   allocation: PortfolioOptimization | null;
+  gold: GoldMonitor | null;
 };
 
 const nav = [
   { id: "dashboard", label: "驾驶舱", key: "D", icon: Gauge },
   { id: "strategies", label: "策略模型", key: "S", icon: SlidersHorizontal },
   { id: "watchlist", label: "股票池", key: "W", icon: Layers3 },
+  { id: "gold", label: "黄金盯盘", key: "G", icon: Coins },
   { id: "discipline", label: "持仓纪律", key: "H", icon: ShieldCheck },
   { id: "analysis", label: "模型分析", key: "A", icon: BarChart3 }
 ] as const;
 
 const fmtMoney = (value: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+
+const fmtCny = (value: number) =>
+  new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
 
 const pct = (value: number) => `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 
@@ -337,7 +375,8 @@ export default function Home() {
     holdings: [],
     holdingAdvice: [],
     candidates: [],
-    allocation: null
+    allocation: null,
+    gold: null
   });
   const [newTicker, setNewTicker] = useState("");
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
@@ -355,7 +394,7 @@ export default function Home() {
     if (loadingRef.current) return;
     loadingRef.current = true;
     try {
-      const [summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings, holdingAdvice, candidates, allocation] = await Promise.all([
+      const [summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings, holdingAdvice, candidates, allocation, gold] = await Promise.all([
         fetchJson<DashboardSummary>("/dashboard/summary"),
         fetchJson<StrategyModel[]>("/strategies"),
         fetchJson<WatchlistItem[]>("/watchlist"),
@@ -369,9 +408,10 @@ export default function Home() {
         fetchJson<Holding[]>("/portfolio/holdings"),
         fetchJson<HoldingAdvice[]>("/advice/holdings"),
         fetchJson<CandidateStock[]>("/screening/candidates"),
-        fetchJson<PortfolioOptimization>("/portfolio/optimization")
+        fetchJson<PortfolioOptimization>("/portfolio/optimization"),
+        fetchJson<GoldMonitor>("/gold/monitor")
       ]);
-      setData({ summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings, holdingAdvice, candidates, allocation });
+      setData({ summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings, holdingAdvice, candidates, allocation, gold });
       setLoading(false);
     } finally {
       loadingRef.current = false;
@@ -609,6 +649,7 @@ export default function Home() {
             validateModels={validateModels}
           />
         )}
+        {active === "gold" && data.gold && <GoldWatch monitor={data.gold} load={load} />}
         {active === "discipline" && (
           <Discipline
             events={data.events}
@@ -1027,6 +1068,97 @@ function Watchlist({
               <small>{quote.source} · {quote.updated_at}</small>
             </article>
           ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function GoldWatch({ monitor, load }: { monitor: GoldMonitor; load: () => Promise<void> }) {
+  return (
+    <div className="page-grid gold-page">
+      <Metric label="当前持有" value={fmtCny(monitor.current_value)} hint={`${monitor.fund_name} · ${monitor.fund_code}`} tone="amber" icon={Coins} />
+      <Metric label="昨日收益" value={fmtCny(monitor.yesterday_pnl)} hint={monitor.estimated_time} tone={monitor.yesterday_pnl < 0 ? "danger" : "green"} />
+      <Metric label="持有收益" value={fmtCny(monitor.holding_pnl)} hint={`持有收益率 ${pct(monitor.holding_pnl_rate)}`} tone={monitor.holding_pnl < 0 ? "danger" : "green"} />
+      <Metric label="估算净值" value={monitor.estimated_nav.toFixed(4)} hint={`${pct(monitor.estimated_change_pct)} · ${monitor.source}`} tone={monitor.estimated_change_pct < 0 ? "danger" : "green"} />
+
+      <section className="panel wide gold-hero">
+        <div className="panel-head">
+          <div>
+            <h2>博时黄金ETF联接C 盯盘</h2>
+            <p>基金代码 {monitor.fund_code}，按中国基金 T+1 确认规则跟踪；盘中估算净值只做提示，最终以收盘后净值记录。</p>
+          </div>
+          <div className="button-row">
+            <span className="badge">{monitor.risk_level}</span>
+            <button onClick={load}>刷新黄金数据</button>
+          </div>
+        </div>
+        <div className="gold-layout">
+          <div className="gold-position">
+            <span>当前持有</span>
+            <strong>{fmtCny(monitor.current_value)}</strong>
+            <dl>
+              <div><dt>估算份额</dt><dd>{monitor.estimated_units.toLocaleString("zh-CN")} 份</dd></div>
+              <div><dt>成本金额</dt><dd>{fmtCny(monitor.cost_basis)}</dd></div>
+              <div><dt>成本净值</dt><dd>{monitor.cost_nav.toFixed(4)}</dd></div>
+              <div><dt>最新净值</dt><dd>{monitor.latest_nav.toFixed(4)} · {monitor.latest_nav_date}</dd></div>
+            </dl>
+          </div>
+          <div className="gold-advice">
+            <span>当前建议</span>
+            <strong>{monitor.action}</strong>
+            <p>{monitor.advice}</p>
+            <em>置信度 {Math.round(monitor.confidence * 100)}%</em>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel wide">
+        <div className="panel-head">
+          <div>
+            <h2>T+1 交易纪律</h2>
+            <p>{monitor.settlement_rule}</p>
+          </div>
+          <span className="badge">{monitor.trade_rule}</span>
+        </div>
+        <div className="advice-grid">
+          {monitor.watch_points.map((point) => (
+            <article className="advice-card medium" key={point}>
+              <strong>纪律检查</strong>
+              <b>执行前确认</b>
+              <p>{point}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel wide">
+        <div className="panel-head">
+          <div>
+            <h2>黄金参考指标</h2>
+            <p>联接基金会滞后跟随底层黄金 ETF 和金价，参考指标只用于判断方向，不作为成交价。</p>
+          </div>
+          <span className="badge">{monitor.reference_symbol}</span>
+        </div>
+        <div className="quote-grid">
+          <article>
+            <strong>{monitor.reference_name}</strong>
+            <b>¥{monitor.reference_price.toFixed(4)}</b>
+            <span className={monitor.reference_change_pct < 0 ? "negative" : "positive"}>{pct(monitor.reference_change_pct)}</span>
+            <small>{monitor.reference_time}</small>
+          </article>
+          <article>
+            <strong>基金最新净值</strong>
+            <b>{monitor.latest_nav.toFixed(4)}</b>
+            <span>{monitor.latest_nav_date}</span>
+            <small>最终记录口径</small>
+          </article>
+          <article>
+            <strong>累计盈亏</strong>
+            <b>{fmtCny(monitor.cumulative_pnl)}</b>
+            <span className="positive">历史累计收益</span>
+            <small>来自你上传的持仓截图</small>
+          </article>
         </div>
       </section>
     </div>

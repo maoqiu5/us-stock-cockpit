@@ -3,6 +3,7 @@ import backend.app.main as main_module
 from backend.app.broker import USmartBrokerAdapter
 import backend.app.data_sources as data_sources_module
 from backend.app.data_sources import market_quotes
+from backend.app.gold_monitor import gold_monitor_snapshot
 from backend.app.main import import_broker_records
 from backend.app.models import AddWatchlistRequest, BrokerImportRecord, BrokerImportRequest, MarketQuote
 from backend.app.usmart_importer import parse_usmart_portfolio_screenshot
@@ -126,6 +127,16 @@ def test_market_quotes_use_previous_close_when_market_closed(monkeypatch):
     assert quotes[0].ticker == "TSLA"
     assert quotes[0].price == 394.46
     assert quotes[0].source == "Yahoo previous close"
+
+
+def test_gold_monitor_uses_uploaded_position_and_t1_rules():
+    snapshot = gold_monitor_snapshot()
+    assert snapshot.fund_code == "002611"
+    assert snapshot.current_value == 10646.93
+    assert snapshot.holding_pnl_rate == -14.82
+    assert "T+1" in snapshot.trade_rule
+    assert snapshot.estimated_nav > 0
+    assert snapshot.watch_points
 
 
 def test_previous_close_import_updates_holdings(monkeypatch):

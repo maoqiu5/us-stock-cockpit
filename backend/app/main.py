@@ -5,8 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .broker import USmartBrokerAdapter, broker_capabilities, broker_from_env, execution_config
 from .data_sources import data_source_statuses, market_quotes
+from .gold_monitor import gold_monitor_snapshot
 from .historical_prices import is_us_market_open, previous_close_quotes, validate_yahoo_ticker
-from .models import AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DisciplineEvent, Holding, HoldingAdvice, ManualExecutionRequest, ModelValidationItem, OrderRequest, PortfolioOptimization, PreviousCloseImportResult, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, ValidateTickerResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult
+from .models import AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DisciplineEvent, GoldMonitor, Holding, HoldingAdvice, ManualExecutionRequest, ModelValidationItem, OrderRequest, PortfolioOptimization, PreviousCloseImportResult, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, ValidateTickerResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult
 from .risk import RiskConfig, RiskEngine
 from .seed import EVENTS, HOLDINGS, ORDERS, STRATEGIES, WATCHLIST
 from .strategy import generate_signal, run_backtest
@@ -216,6 +217,11 @@ def import_previous_close() -> PreviousCloseImportResult:
 @app.get("/data-sources/status")
 def source_statuses():
     return data_source_statuses()
+
+
+@app.get("/gold/monitor")
+def gold_monitor() -> GoldMonitor:
+    return gold_monitor_snapshot()
 
 
 @app.get("/portfolio/holdings")

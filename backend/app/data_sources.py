@@ -44,6 +44,14 @@ def data_source_statuses() -> list[DataSourceStatus]:
             status="manual",
             detail="通过结单、CSV、截图 OCR 或手工记录导入；不需要券商 Open API。",
         ),
+        DataSourceStatus(
+            id="gold-fund",
+            name="天天基金/东方财富",
+            purpose="博时黄金ETF联接C估算净值、黄金ETF参考价",
+            configured=True,
+            status="active",
+            detail="用于黄金基金 T+1 盯盘；估算净值只做盘中参考，最终以基金净值确认。",
+        ),
     ]
 
 

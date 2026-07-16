@@ -68,6 +68,38 @@ class MarketQuote(BaseModel):
     updated_at: str
 
 
+class GoldMonitor(BaseModel):
+    fund_code: str
+    fund_name: str
+    risk_level: str
+    currency: str
+    current_value: float
+    estimated_units: float
+    cost_basis: float
+    cost_nav: float
+    latest_nav: float
+    latest_nav_date: str
+    estimated_nav: float
+    estimated_change_pct: float
+    estimated_time: str
+    yesterday_pnl: float
+    holding_pnl: float
+    holding_pnl_rate: float
+    cumulative_pnl: float
+    reference_symbol: str
+    reference_name: str
+    reference_price: float
+    reference_change_pct: float
+    reference_time: str
+    trade_rule: str
+    settlement_rule: str
+    action: str
+    confidence: float
+    advice: str
+    watch_points: list[str]
+    source: str
+
+
 class DataSourceStatus(BaseModel):
     id: str
     name: str
