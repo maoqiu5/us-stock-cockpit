@@ -7,7 +7,7 @@ from .broker import USmartBrokerAdapter, broker_capabilities, broker_from_env, e
 from .data_sources import data_source_statuses, market_quotes
 from .gold_monitor import gold_monitor_snapshot
 from .historical_prices import is_us_market_open, previous_close_quotes, validate_yahoo_ticker
-from .models import AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DisciplineEvent, GoldMonitor, Holding, HoldingAdvice, ManualExecutionRequest, ModelValidationItem, OrderRequest, PortfolioOptimization, PreviousCloseImportResult, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, ValidateTickerResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult
+from .models import AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DisciplineEvent, GoldManualTrade, GoldManualTradeRequest, GoldMonitor, Holding, HoldingAdvice, ManualExecutionRequest, ModelValidationItem, OrderRequest, PortfolioOptimization, PreviousCloseImportResult, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, ValidateTickerResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult
 from .risk import RiskConfig, RiskEngine
 from .seed import EVENTS, HOLDINGS, ORDERS, STRATEGIES, WATCHLIST
 from .strategy import generate_signal, run_backtest
@@ -32,6 +32,8 @@ state = {
     "quote_snapshot_source": "",
     "quote_snapshot_as_of": "",
 }
+
+GOLD_MANUAL_TRADES: list[GoldManualTrade] = []
 
 
 def risk_engine() -> RiskEngine:
@@ -222,6 +224,39 @@ def source_statuses():
 @app.get("/gold/monitor")
 def gold_monitor() -> GoldMonitor:
     return gold_monitor_snapshot()
+
+
+@app.get("/gold/manual-trades")
+def gold_manual_trades() -> list[GoldManualTrade]:
+    return GOLD_MANUAL_TRADES
+
+
+@app.post("/gold/manual-trades")
+def create_gold_manual_trade(request: GoldManualTradeRequest) -> GoldManualTrade:
+    grams = request.grams if request.grams is not None else round(request.amount_cny / request.price, 4)
+    trade = GoldManualTrade(
+        id=f"gold_manual_{len(GOLD_MANUAL_TRADES) + 1}",
+        side=request.side,
+        amount_cny=request.amount_cny,
+        grams=grams,
+        price=request.price,
+        executed_at=request.executed_at,
+        note=request.note,
+    )
+    GOLD_MANUAL_TRADES.insert(0, trade)
+    EVENTS.insert(
+        0,
+        DisciplineEvent(
+            id=f"evt_gold_manual_{len(GOLD_MANUAL_TRADES)}",
+            ticker="CMBC-AU",
+            title="黄金线下操作已记录",
+            reason=f"{request.executed_at} {request.side.value} {grams:.4f} 克，成交价 ¥{request.price:.2f}/克，金额 ¥{request.amount_cny:.2f}。",
+            action="纳入黄金盯盘和后续仓位纪律分析",
+            severity="ok",
+            created_at=request.executed_at,
+        ),
+    )
+    return trade
 
 
 @app.get("/portfolio/holdings")

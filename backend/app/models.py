@@ -111,6 +111,27 @@ class GoldMonitor(BaseModel):
     source: str
 
 
+class GoldManualTrade(BaseModel):
+    id: str
+    product_code: str = "CMBC-AU"
+    product_name: str = "民生积存金"
+    side: Side = Side.buy
+    amount_cny: float = Field(gt=0)
+    grams: float = Field(gt=0)
+    price: float = Field(gt=0)
+    executed_at: str
+    note: str = ""
+
+
+class GoldManualTradeRequest(BaseModel):
+    side: Side = Side.buy
+    amount_cny: float = Field(gt=0)
+    grams: Optional[float] = Field(default=None, gt=0)
+    price: float = Field(gt=0)
+    executed_at: str
+    note: str = ""
+
+
 class DataSourceStatus(BaseModel):
     id: str
     name: str

@@ -16,7 +16,7 @@ import {
   SlidersHorizontal,
   WalletCards
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 const USMART_SCREENSHOT_PATH =
@@ -217,6 +217,18 @@ type GoldMonitor = {
   source: string;
 };
 
+type GoldManualTrade = {
+  id: string;
+  product_code: string;
+  product_name: string;
+  side: "BUY" | "SELL";
+  amount_cny: number;
+  grams: number;
+  price: number;
+  executed_at: string;
+  note: string;
+};
+
 type PreviousCloseImportResult = {
   as_of: string;
   source: string;
@@ -302,6 +314,7 @@ type AppData = {
   candidates: CandidateStock[];
   allocation: PortfolioOptimization | null;
   gold: GoldMonitor | null;
+  goldTrades: GoldManualTrade[];
 };
 
 const nav = [
@@ -320,6 +333,12 @@ const fmtCny = (value: number) =>
   new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
 
 const pct = (value: number) => `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+
+const currentLocalInputValue = () => {
+  const now = new Date();
+  const offsetMs = now.getTimezoneOffset() * 60_000;
+  return new Date(now.getTime() - offsetMs).toISOString().slice(0, 16);
+};
 
 const defaultPriceForTicker = (ticker: string) =>
   ({ "NOK.US": 11.23, "SMR.US": 8.36, NOK: 11.25, IAU: 76.28, NVDA: 212.5 }[ticker] || 100);
@@ -382,7 +401,8 @@ export default function Home() {
     holdingAdvice: [],
     candidates: [],
     allocation: null,
-    gold: null
+    gold: null,
+    goldTrades: []
   });
   const [newTicker, setNewTicker] = useState("");
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
@@ -400,7 +420,7 @@ export default function Home() {
     if (loadingRef.current) return;
     loadingRef.current = true;
     try {
-      const [summary, strategies, watchlist, events, orders, risk, brokers, execution, sources, holdings, holdingAdvice, candidates, allocation, gold] = await Promise.all([
+      const [summary, strategies, watchlist, events, orders, risk, brokers, execution, sources, holdings, holdingAdvice, candidates, allocation, gold, goldTrades] = await Promise.all([
         fetchJson<DashboardSummary>("/dashboard/summary"),
         fetchJson<StrategyModel[]>("/strategies"),
         fetchJson<WatchlistItem[]>("/watchlist"),
@@ -414,9 +434,10 @@ export default function Home() {
         fetchJson<HoldingAdvice[]>("/advice/holdings"),
         fetchJson<CandidateStock[]>("/screening/candidates"),
         fetchJson<PortfolioOptimization>("/portfolio/optimization"),
-        fetchJson<GoldMonitor>("/gold/monitor")
+        fetchJson<GoldMonitor>("/gold/monitor"),
+        fetchJson<GoldManualTrade[]>("/gold/manual-trades")
       ]);
-      setData((current) => ({ ...current, summary, strategies, watchlist, events, orders, risk, brokers, execution, sources, holdings, holdingAdvice, candidates, allocation, gold }));
+      setData((current) => ({ ...current, summary, strategies, watchlist, events, orders, risk, brokers, execution, sources, holdings, holdingAdvice, candidates, allocation, gold, goldTrades }));
       setLoading(false);
       fetchJson<MarketQuote[]>("/market/quotes")
         .then((quotes) => setData((current) => ({ ...current, quotes })))
@@ -427,8 +448,11 @@ export default function Home() {
   }, []);
 
   const loadGold = useCallback(async () => {
-    const gold = await fetchJson<GoldMonitor>("/gold/monitor");
-    setData((current) => ({ ...current, gold }));
+    const [gold, goldTrades] = await Promise.all([
+      fetchJson<GoldMonitor>("/gold/monitor"),
+      fetchJson<GoldManualTrade[]>("/gold/manual-trades")
+    ]);
+    setData((current) => ({ ...current, gold, goldTrades }));
   }, []);
 
   useEffect(() => {
@@ -671,7 +695,7 @@ export default function Home() {
             validateModels={validateModels}
           />
         )}
-        {active === "gold" && data.gold && <GoldWatch monitor={data.gold} loadGold={loadGold} />}
+        {active === "gold" && data.gold && <GoldWatch monitor={data.gold} trades={data.goldTrades} loadGold={loadGold} setNotice={setNotice} />}
         {active === "discipline" && (
           <Discipline
             events={data.events}
@@ -1096,7 +1120,25 @@ function Watchlist({
   );
 }
 
-function GoldWatch({ monitor, loadGold }: { monitor: GoldMonitor; loadGold: () => Promise<void> }) {
+function GoldWatch({
+  monitor,
+  trades,
+  loadGold,
+  setNotice
+}: {
+  monitor: GoldMonitor;
+  trades: GoldManualTrade[];
+  loadGold: () => Promise<void>;
+  setNotice: (notice: string) => void;
+}) {
+  const [tradeForm, setTradeForm] = useState({
+    executed_at: currentLocalInputValue(),
+    amount_cny: monitor.first_order_amount.toFixed(2),
+    grams: "",
+    price: monitor.live_price.toFixed(2),
+    note: ""
+  });
+
   const trend = useMemo(() => {
     const width = 720;
     const height = 260;
@@ -1129,6 +1171,36 @@ function GoldWatch({ monitor, loadGold }: { monitor: GoldMonitor; loadGold: () =
       xTicks,
     };
   }, [monitor]);
+
+  const plannedGrams = Number(tradeForm.grams) || (Number(tradeForm.amount_cny) && Number(tradeForm.price) ? Number(tradeForm.amount_cny) / Number(tradeForm.price) : 0);
+  const totalGoldGrams = trades.reduce((sum, trade) => sum + (trade.side === "BUY" ? trade.grams : -trade.grams), 0);
+  const totalGoldCost = trades.reduce((sum, trade) => sum + (trade.side === "BUY" ? trade.amount_cny : -trade.amount_cny), 0);
+  const averageGoldCost = totalGoldGrams > 0 ? totalGoldCost / totalGoldGrams : 0;
+
+  async function recordGoldTrade(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const amount = Number(tradeForm.amount_cny);
+    const price = Number(tradeForm.price);
+    const grams = tradeForm.grams ? Number(tradeForm.grams) : undefined;
+    if (!amount || !price) {
+      setNotice("请填写有效的黄金成交金额和成交价。");
+      return;
+    }
+    await fetchJson<GoldManualTrade>("/gold/manual-trades", {
+      method: "POST",
+      body: JSON.stringify({
+        side: "BUY",
+        amount_cny: amount,
+        grams,
+        price,
+        executed_at: tradeForm.executed_at.replace("T", " "),
+        note: tradeForm.note
+      })
+    });
+    setTradeForm((current) => ({ ...current, grams: "", note: "" }));
+    await loadGold();
+    setNotice("已记录一笔黄金线下买入，后续分析会纳入这笔成交。");
+  }
 
   return (
     <div className="page-grid gold-page">
@@ -1213,6 +1285,85 @@ function GoldWatch({ monitor, loadGold }: { monitor: GoldMonitor; loadGold: () =
               </text>
             )}
           </svg>
+        </div>
+      </section>
+
+      <section className="panel wide">
+        <div className="panel-head">
+          <div>
+            <h2>线下操作记录</h2>
+            <p>记录你在银行 App 实际成交的积存金，系统只使用真实输入，不自动补齐成交。</p>
+          </div>
+          <span className="badge">{trades.length ? `${trades.length} 笔记录` : "暂无记录"}</span>
+        </div>
+        <form className="gold-trade-form" onSubmit={recordGoldTrade}>
+          <label>
+            <span>成交时间</span>
+            <input
+              type="datetime-local"
+              value={tradeForm.executed_at}
+              onChange={(event) => setTradeForm((current) => ({ ...current, executed_at: event.target.value }))}
+            />
+          </label>
+          <label>
+            <span>买入金额</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={tradeForm.amount_cny}
+              onChange={(event) => setTradeForm((current) => ({ ...current, amount_cny: event.target.value }))}
+            />
+          </label>
+          <label>
+            <span>成交价/克</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={tradeForm.price}
+              onChange={(event) => setTradeForm((current) => ({ ...current, price: event.target.value }))}
+            />
+          </label>
+          <label>
+            <span>成交克数</span>
+            <input
+              type="number"
+              min="0"
+              step="0.0001"
+              placeholder={plannedGrams ? plannedGrams.toFixed(4) : "可留空自动计算"}
+              value={tradeForm.grams}
+              onChange={(event) => setTradeForm((current) => ({ ...current, grams: event.target.value }))}
+            />
+          </label>
+          <label className="wide-input">
+            <span>备注</span>
+            <input
+              placeholder="例如：民生 App 手动买入"
+              value={tradeForm.note}
+              onChange={(event) => setTradeForm((current) => ({ ...current, note: event.target.value }))}
+            />
+          </label>
+          <button type="submit">记录买入</button>
+        </form>
+        <div className="gold-trade-summary">
+          <div><span>累计克数</span><strong>{totalGoldGrams.toFixed(4)} 克</strong></div>
+          <div><span>累计投入</span><strong>{fmtCny(totalGoldCost)}</strong></div>
+          <div><span>平均成本</span><strong>{averageGoldCost ? `¥${averageGoldCost.toFixed(2)}/克` : "未形成"}</strong></div>
+          <div><span>按现价估值</span><strong>{fmtCny(totalGoldGrams * monitor.live_price)}</strong></div>
+        </div>
+        <div className="gold-trade-list">
+          {trades.map((trade) => (
+            <article key={trade.id}>
+              <div>
+                <strong>{trade.executed_at}</strong>
+                <span>{trade.note || trade.product_name}</span>
+              </div>
+              <b>{trade.grams.toFixed(4)} 克</b>
+              <span>{fmtCny(trade.amount_cny)} · ¥{trade.price.toFixed(2)}/克</span>
+            </article>
+          ))}
+          {!trades.length && <p>还没有线下成交记录。你买入后在这里补一笔，系统就能按真实仓位分析。</p>}
         </div>
       </section>
 

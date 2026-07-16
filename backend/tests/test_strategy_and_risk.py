@@ -5,7 +5,7 @@ import backend.app.data_sources as data_sources_module
 from backend.app.data_sources import market_quotes
 from backend.app.gold_monitor import gold_monitor_snapshot
 from backend.app.main import import_broker_records
-from backend.app.models import AddWatchlistRequest, BrokerImportRecord, BrokerImportRequest, MarketQuote
+from backend.app.models import AddWatchlistRequest, BrokerImportRecord, BrokerImportRequest, GoldManualTradeRequest, MarketQuote
 from backend.app.usmart_importer import parse_usmart_portfolio_screenshot
 from backend.app.za_importer import parse_za_bank_portfolio_screenshot
 from backend.app.risk import RiskConfig, RiskEngine
@@ -140,6 +140,22 @@ def test_gold_monitor_tracks_minsheng_accumulated_gold_plan():
     assert len(snapshot.trend_points) >= 20
     assert snapshot.reference_symbol in {"CCB_999933", "SGE_AU9999", "CMBC_BANK_GOLD"}
     assert snapshot.watch_points
+
+
+def test_gold_manual_trade_records_real_offline_execution():
+    before = len(main_module.gold_manual_trades())
+    trade = main_module.create_gold_manual_trade(
+        GoldManualTradeRequest(
+            amount_cny=1000,
+            price=880,
+            executed_at="2026-07-16 20:45",
+            note="test manual bank app buy",
+        )
+    )
+    assert trade.grams == round(1000 / 880, 4)
+    assert trade.price == 880
+    assert len(main_module.gold_manual_trades()) == before + 1
+    assert main_module.gold_manual_trades()[0].id == trade.id
 
 
 def test_previous_close_import_updates_holdings(monkeypatch):
