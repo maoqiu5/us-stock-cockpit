@@ -81,7 +81,7 @@ curl -X POST http://127.0.0.1:8000/imports/za-screenshot \
 ```bash
 curl -X POST http://127.0.0.1:8000/imports/broker-records \
   -H 'Content-Type: application/json' \
-  -d '{"broker":"usmart","records":[{"broker":"usmart","record_type":"holding","ticker":"NVDA","qty":3,"price":164.8,"executed_at":"07/06 15:20","note":"uSMART 持仓页手工导入"}]}'
+  -d '{"broker":"usmart","records":[{"broker":"usmart","record_type":"holding","ticker":"NOK.US","qty":99,"price":11.23,"executed_at":"07/16 14:02","note":"uSMART 持仓页手工导入"}]}'
 ```
 
 ### uSMART / 香港盈立
@@ -112,7 +112,7 @@ USMART_ALLOW_NETWORK_SUBMIT=true
 ```bash
 curl -X POST http://127.0.0.1:8000/orders/preview \
   -H 'Content-Type: application/json' \
-  -d '{"ticker":"META","side":"BUY","qty":1,"order_type":"LMT","limit_price":712.4,"dry_run":false}'
+  -d '{"ticker":"NOK.US","side":"BUY","qty":1,"order_type":"LMT","limit_price":11.23,"dry_run":false}'
 ```
 
 ### ZA Bank / 众安
@@ -124,7 +124,7 @@ curl -X POST http://127.0.0.1:8000/orders/preview \
 ```bash
 curl -X POST http://127.0.0.1:8000/manual-executions \
   -H 'Content-Type: application/json' \
-  -d '{"broker":"za-bank","ticker":"META","side":"BUY","qty":1,"price":712.4,"executed_at":"07/06 15:10","note":"ZA Bank App 手工确认"}'
+  -d '{"broker":"za-bank","ticker":"NOK","side":"BUY","qty":1,"price":11.25,"executed_at":"07/16 14:04","note":"ZA Bank App 手工确认"}'
 ```
 
 ### IBKR 备用

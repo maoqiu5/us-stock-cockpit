@@ -7,14 +7,14 @@ from .models import OrderRequest, RiskDecision
 
 @dataclass
 class RiskConfig:
-    account_value: float = 284350
+    account_value: float = 2736.95
     position_limit: float = 0.05
     total_exposure_limit: float = 0.50
     daily_loss_limit: float = 0.02
     weekly_loss_limit: float = 0.06
-    current_exposure: float = 0.18
-    today_pnl: float = 12480
-    weekly_pnl: float = 22600
+    current_exposure: float = 1.0
+    today_pnl: float = -21.72
+    weekly_pnl: float = -1611.95
     automation_paused: bool = False
 
 

@@ -9,13 +9,11 @@ from .seed import WATCHLIST
 
 
 FALLBACK_PRICES = {
-    "AAPL": (213.4, 1.12, 0.53, 51234000),
-    "MSFT": (503.1, -0.8, -0.16, 23122000),
-    "NVDA": (164.8, -3.4, -2.02, 199420000),
-    "AMZN": (226.2, 2.7, 1.21, 40123000),
-    "GOOGL": (184.6, 1.9, 1.04, 28770000),
-    "META": (712.4, 8.6, 1.22, 17450000),
-    "TSLA": (319.8, -4.9, -1.51, 87221000),
+    "NOK.US": (11.23, 0.0, 0.0, 0),
+    "SMR.US": (8.36, 0.0, 0.0, 0),
+    "NOK": (11.25, -0.45, -3.85, 0),
+    "IAU": (76.28, 0.01, 0.01, 0),
+    "NVDA": (212.5, 0.0, 0.0, 0),
 }
 
 
@@ -75,7 +73,7 @@ def _akshare_quotes(tickers: list[str]) -> list[MarketQuote]:
             continue
         quotes.append(
             MarketQuote(
-                ticker=ticker,
+                ticker=next((wanted_ticker for wanted_ticker in wanted if wanted_ticker.replace(".US", "") == ticker), ticker),
                 name=str(row.get(name_col, "")),
                 price=float(row[price_col]),
                 change=float(row.get(change_col, 0) or 0),

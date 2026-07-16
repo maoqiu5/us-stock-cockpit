@@ -213,9 +213,12 @@ const nav = [
 ] as const;
 
 const fmtMoney = (value: number) =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
 
 const pct = (value: number) => `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+
+const defaultPriceForTicker = (ticker: string) =>
+  ({ "NOK.US": 11.23, "SMR.US": 8.36, NOK: 11.25, IAU: 76.28, NVDA: 212.5 }[ticker] || 100);
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -244,7 +247,7 @@ export default function Home() {
   });
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
   const [selectedStrategy, setSelectedStrategy] = useState("pe_v1");
-  const [selectedTicker, setSelectedTicker] = useState("META");
+  const [selectedTicker, setSelectedTicker] = useState("NOK.US");
   const [analysisType, setAnalysisType] = useState("offline");
   const [preparedOrder, setPreparedOrder] = useState<PreparedOrder | null>(null);
   const [loading, setLoading] = useState(true);
@@ -310,7 +313,7 @@ export default function Home() {
         side: "BUY",
         qty: 1,
         order_type: "LMT",
-        limit_price: selectedTicker === "META" ? 712.4 : 100,
+        limit_price: defaultPriceForTicker(selectedTicker),
         strategy_id: selectedStrategy,
         dry_run: false
       })
@@ -327,45 +330,13 @@ export default function Home() {
         ticker: selectedTicker,
         side: "BUY",
         qty: 1,
-        price: selectedTicker === "META" ? 712.4 : 100,
-        executed_at: "07/06 15:10",
+        price: defaultPriceForTicker(selectedTicker),
+        executed_at: "07/16 14:04",
         note: "ZA Bank App 手工确认"
       })
     });
     await load();
     setNotice("已记录一笔 ZA Bank 手工成交。");
-  }
-
-  async function importSampleBrokerRecord() {
-    await fetchJson("/imports/broker-records", {
-      method: "POST",
-      body: JSON.stringify({
-        broker: "usmart",
-        records: [
-          {
-            broker: "usmart",
-            record_type: "holding",
-            ticker: "NVDA",
-            qty: 3,
-            price: 164.8,
-            executed_at: "07/06 15:20",
-            note: "uSMART 持仓页手工导入"
-          },
-          {
-            broker: "usmart",
-            record_type: "trade",
-            ticker: "NVDA",
-            side: "BUY",
-            qty: 3,
-            price: 164.8,
-            executed_at: "07/06 15:20",
-            note: "uSMART 成交记录导入"
-          }
-        ]
-      })
-    });
-    await load();
-    setNotice("已导入一组 uSMART 样例持仓和成交记录。");
   }
 
   async function importUsmartScreenshot() {
@@ -421,7 +392,7 @@ export default function Home() {
             <div><dt>全局风控</dt><dd>{data.summary?.global_risk || "正常"}</dd></div>
             <div><dt>数据源</dt><dd>{data.summary?.data_source || "本地记录"}</dd></div>
             <div><dt>同步状态</dt><dd>{data.summary?.sync_status || "未登录"}</dd></div>
-            <div><dt>本地保存</dt><dd>{data.summary?.local_saved_at || "07/06 14:51"}</dd></div>
+            <div><dt>本地保存</dt><dd>{data.summary?.local_saved_at || "07/16 14:04"}</dd></div>
           </dl>
           <button className="ghost">重置本地数据</button>
         </div>
@@ -464,7 +435,6 @@ export default function Home() {
             orders={data.orders}
             holdings={data.holdings}
             recordZaManualExecution={recordZaManualExecution}
-            importSampleBrokerRecord={importSampleBrokerRecord}
             importUsmartScreenshot={importUsmartScreenshot}
             importZaScreenshot={importZaScreenshot}
           />
@@ -746,7 +716,6 @@ function Discipline({
   orders,
   holdings,
   recordZaManualExecution,
-  importSampleBrokerRecord,
   importUsmartScreenshot,
   importZaScreenshot
 }: {
@@ -754,7 +723,6 @@ function Discipline({
   orders: Order[];
   holdings: Holding[];
   recordZaManualExecution: () => Promise<void>;
-  importSampleBrokerRecord: () => Promise<void>;
   importUsmartScreenshot: () => Promise<void>;
   importZaScreenshot: () => Promise<void>;
 }) {
@@ -808,7 +776,6 @@ function Discipline({
           <div className="button-row">
             <button onClick={importZaScreenshot}>导入 ZA 截图</button>
             <button onClick={importUsmartScreenshot}>导入 uSMART 截图</button>
-            <button onClick={importSampleBrokerRecord}>导入样例记录</button>
           </div>
         </div>
         <table>

@@ -58,11 +58,13 @@ def generate_signal(item: WatchlistItem, strategy_id: str = "pe_v1") -> Signal:
 def run_backtest(strategy_id: str, ticker: str) -> BacktestResult:
     seed = sum(ord(ch) for ch in f"{strategy_id}:{ticker}")
     base_return = 18 + (seed % 17)
-    if strategy_id == "pe_v1" and ticker == "META":
-        base_return = 30.67
+    if strategy_id == "pe_v1" and ticker == "NOK.US":
+        base_return = -29.83
     pnl = 12000 + (seed % 7000) * 4.9
-    if ticker == "META":
-        pnl = 48308
+    if ticker == "NOK.US":
+        pnl = -472.72
+    if ticker == "SMR.US":
+        pnl = -869.6
 
     records: list[BacktestPoint] = []
     equity = 100000.0
@@ -85,8 +87,8 @@ def run_backtest(strategy_id: str, ticker: str) -> BacktestResult:
         pnl=round(pnl, 2),
         win_rate=round(win_rate, 2),
         profit_factor=round(min(profit_factor, 4.8), 2),
-        max_drawdown=-12.74 if ticker in {"META", "NVDA"} else -8.4,
-        trades=13 if strategy_id == "pe_v1" else 9,
+        max_drawdown=-56.53 if ticker == "SMR.US" else (-30.12 if ticker in {"NOK.US", "NOK"} else -10.94),
+        trades=5 if strategy_id == "pe_v1" else 3,
         benchmark_return=15.2,
         records=records,
     )

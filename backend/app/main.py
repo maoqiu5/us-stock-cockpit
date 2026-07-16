@@ -36,31 +36,35 @@ def health() -> dict[str, str]:
 
 @app.get("/dashboard/summary")
 def dashboard_summary() -> dict:
+    total_value = 2736.95
+    today_pnl = -21.72
+    risk = risk_engine().status()
     return {
-        "account_total": 284350,
-        "today_pnl": 12480,
-        "discipline_score": 86,
-        "active_signals": 9,
-        "signal_breakdown": {"buy": 2, "sell": 2, "hold": 3, "watch": 4},
-        "max_drawdown": -8.4,
+        "account_total": total_value,
+        "today_pnl": today_pnl,
+        "discipline_score": 62,
+        "active_signals": 5,
+        "signal_breakdown": {"buy": 0, "sell": 2, "hold": 0, "watch": 3},
+        "max_drawdown": -56.53,
         "max_drawdown_limit": -12,
-        "execution_mode": "本地记录" if execution_config().mode == "paper" else execution_config().mode,
+        "execution_mode": "本地对账" if execution_config().mode == "paper" else execution_config().mode,
         "automation_paused": state["automation_paused"],
-        "global_risk": "暂停" if state["automation_paused"] else "正常",
-        "data_source": "本地记录",
-        "sync_status": "未登录",
-        "local_saved_at": "07/06 14:51",
+        "global_risk": "暂停" if state["automation_paused"] else ("已阻断" if not risk.allowed else "正常"),
+        "data_source": "截图导入",
+        "sync_status": "本地已导入",
+        "local_saved_at": "07/16 14:04",
         "today_orders": "0 / 5",
         "workflow": [
-            {"step": 1, "title": "建模型", "detail": "4 个模型", "status": "done"},
-            {"step": 2, "title": "筛股票", "detail": "10 个判定", "status": "done"},
-            {"step": 3, "title": "刷行情", "detail": "今日 07/06 14:51", "status": "done"},
-            {"step": 4, "title": "看信号", "detail": "9 条信号", "status": "active"},
-            {"step": 5, "title": "记执行", "detail": "3 条记录", "status": "active"},
+            {"step": 1, "title": "导入持仓", "detail": "ZA 3 / uSMART 2", "status": "done"},
+            {"step": 2, "title": "刷行情", "detail": "5 只持仓", "status": "done"},
+            {"step": 3, "title": "算盈亏", "detail": "今日 -$21.72", "status": "done"},
+            {"step": 4, "title": "看风险", "detail": "2 只大回撤", "status": "active"},
+            {"step": 5, "title": "记执行", "detail": "截图导入", "status": "active"},
         ],
         "checks": [
-            {"severity": "ok", "title": "行情已准备好", "detail": "今天已刷新 3 只股票，可以继续看信号。", "time": "07/06 14:51"},
-            {"severity": "risk", "title": "NVDA 出现风险提醒", "detail": "PE 52.1 > 40，已触发卖出/减仓候选，请按风控处理。", "time": "自定义 PE 纪律策略 · 优先级 100"},
+            {"severity": "ok", "title": "ZA/uSMART 持仓已导入", "detail": "已从两张截图同步 5 条真实持仓。", "time": "07/16 14:04"},
+            {"severity": "risk", "title": "SMR.US 回撤较大", "detail": "持仓盈亏 -56.53%，亏损 -$869.60。", "time": "uSMART 截图 · 07/16 14:02"},
+            {"severity": "warn", "title": "NOK 双账户持仓", "detail": "ZA 44 股、uSMART 99 股，合计 143 股。", "time": "ZA/uSMART 合并视图"},
         ],
     }
 
