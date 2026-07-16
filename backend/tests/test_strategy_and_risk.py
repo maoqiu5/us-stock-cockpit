@@ -1,5 +1,10 @@
+import importlib
+
+import pytest
+
 from backend.app.models import OrderRequest, Side
 import backend.app.main as main_module
+import backend.app.seed as seed_module
 from backend.app.broker import USmartBrokerAdapter
 import backend.app.data_sources as data_sources_module
 from backend.app.data_sources import market_quotes
@@ -9,13 +14,31 @@ from backend.app.models import AddWatchlistRequest, BrokerImportRecord, BrokerIm
 from backend.app.usmart_importer import parse_usmart_portfolio_screenshot
 from backend.app.za_importer import parse_za_bank_portfolio_screenshot
 from backend.app.risk import RiskConfig, RiskEngine
-from backend.app.seed import WATCHLIST
 import backend.app.strategy as strategy_module
 from backend.app.strategy import generate_signal, run_backtest, score_watchlist_item
 
 
+@pytest.fixture(autouse=True)
+def isolate_local_state(tmp_path, monkeypatch):
+    fresh_seed = importlib.reload(seed_module)
+    monkeypatch.setattr(main_module, "LOCAL_STATE_PATH", tmp_path / "local_state.json")
+    main_module.WATCHLIST[:] = [item.model_copy(deep=True) for item in fresh_seed.WATCHLIST]
+    main_module.HOLDINGS[:] = [item.model_copy(deep=True) for item in fresh_seed.HOLDINGS]
+    main_module.EVENTS[:] = [item.model_copy(deep=True) for item in fresh_seed.EVENTS]
+    main_module.ORDERS[:] = [item.model_copy(deep=True) for item in fresh_seed.ORDERS]
+    main_module.GOLD_MANUAL_TRADES.clear()
+    main_module.state.update(
+        {
+            "automation_paused": False,
+            "quote_snapshot": None,
+            "quote_snapshot_source": "",
+            "quote_snapshot_as_of": "",
+        }
+    )
+
+
 def test_factor_score_and_signal_for_current_nok_position():
-    nok = next(item for item in WATCHLIST if item.ticker == "NOK.US")
+    nok = next(item for item in main_module.WATCHLIST if item.ticker == "NOK.US")
     assert score_watchlist_item(nok) < 80
     signal = generate_signal(nok)
     assert signal.side == Side.buy
@@ -24,7 +47,7 @@ def test_factor_score_and_signal_for_current_nok_position():
 
 
 def test_overheated_smr_generates_sell_signal():
-    smr = next(item for item in WATCHLIST if item.ticker == "SMR.US")
+    smr = next(item for item in main_module.WATCHLIST if item.ticker == "SMR.US")
     signal = generate_signal(smr)
     assert signal.side == Side.sell
     assert "估值过热" in signal.reason
@@ -62,7 +85,7 @@ def test_all_models_and_current_tickers_can_backtest(monkeypatch):
 
     monkeypatch.setattr(strategy_module, "daily_close_series", fake_daily_close_series)
     for strategy_id in ("pe_v1", "peg_v1", "roi_v1"):
-        for item in WATCHLIST:
+        for item in main_module.WATCHLIST:
             result = run_backtest(strategy_id, item.ticker)
             assert result.strategy_id == strategy_id
             assert result.ticker == item.ticker
