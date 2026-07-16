@@ -3,7 +3,7 @@ import backend.app.main as main_module
 from backend.app.broker import USmartBrokerAdapter
 from backend.app.data_sources import market_quotes
 from backend.app.main import import_broker_records
-from backend.app.models import BrokerImportRecord, BrokerImportRequest, MarketQuote
+from backend.app.models import AddWatchlistRequest, BrokerImportRecord, BrokerImportRequest, MarketQuote
 from backend.app.usmart_importer import parse_usmart_portfolio_screenshot
 from backend.app.za_importer import parse_za_bank_portfolio_screenshot
 from backend.app.risk import RiskConfig, RiskEngine
@@ -111,6 +111,38 @@ def test_previous_close_import_updates_holdings(monkeypatch):
     assert result.source == "昨收快照"
     assert result.holdings[0].market_price == 12.0
     assert result.account_total > 0
+
+
+def test_watchlist_add_and_advice_endpoints(monkeypatch):
+    monkeypatch.setattr(
+        main_module,
+        "previous_close_quotes",
+        lambda tickers: ([MarketQuote(ticker=tickers[0], name=tickers[0], price=100, change=1, pct_change=1, volume=0, source="test", delay_seconds=0, updated_at="07/15 16:00")], []),
+    )
+    added = main_module.add_watchlist_item(AddWatchlistRequest(ticker="QQQ"))
+    assert added.ticker == "QQQ"
+    assert main_module.holding_advice()
+    assert main_module.screening_candidates()
+    allocation = main_module.portfolio_optimization()
+    assert allocation.suggestions
+    assert allocation.cash_target > 0
+
+
+def test_model_validation_returns_all_strategies(monkeypatch):
+    monkeypatch.setattr(
+        strategy_module,
+        "daily_close_series",
+        lambda ticker, start_date, end_date: [
+            ("2026-05-01", 100.0),
+            ("2026-05-15", 104.0),
+            ("2026-06-01", 101.0),
+            ("2026-06-15", 108.0),
+            ("2026-07-01", 106.0),
+            ("2026-07-16", 112.0),
+        ],
+    )
+    validation = main_module.model_validation()
+    assert {item.strategy_id for item in validation} == {"pe_v1", "peg_v1", "roi_v1"}
 
 
 def test_import_broker_records_updates_holdings_and_trades():

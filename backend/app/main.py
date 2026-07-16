@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .broker import USmartBrokerAdapter, broker_capabilities, broker_from_env, execution_config
 from .data_sources import data_source_statuses, market_quotes
 from .historical_prices import previous_close_quotes
-from .models import BacktestRequest, BrokerImportRequest, BrokerImportResult, DisciplineEvent, Holding, ManualExecutionRequest, OrderRequest, PreviousCloseImportResult, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, ZABankScreenshotImportRequest, ZABankScreenshotImportResult
+from .models import AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DisciplineEvent, Holding, HoldingAdvice, ManualExecutionRequest, ModelValidationItem, OrderRequest, PortfolioOptimization, PreviousCloseImportResult, Signal, TradeOrder, USmartScreenshotImportRequest, USmartScreenshotImportResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult
 from .risk import RiskConfig, RiskEngine
 from .seed import EVENTS, HOLDINGS, ORDERS, STRATEGIES, WATCHLIST
 from .strategy import generate_signal, run_backtest
@@ -97,6 +97,33 @@ def watchlist():
     return WATCHLIST
 
 
+@app.post("/watchlist")
+def add_watchlist_item(request: AddWatchlistRequest) -> WatchlistItem:
+    ticker = request.ticker.strip().upper()
+    if not ticker:
+        raise HTTPException(status_code=400, detail="ticker required")
+    existing = next((item for item in WATCHLIST if item.ticker == ticker), None)
+    if existing:
+        return existing
+    quote, *_ = previous_close_quotes([ticker])
+    pct_change = quote[0].pct_change if quote else 0
+    trend = "上行" if pct_change > 1 else ("下行" if pct_change < -1 else "横盘")
+    item = WatchlistItem(
+        ticker=ticker,
+        name=request.name or f"{ticker} · 手工加入",
+        sector=request.sector or "User Added",
+        pe=30.0,
+        peg=1.8,
+        roi=16.0,
+        growth=10.0,
+        trend=trend,
+        eligible=pct_change > -3,
+        signal="WATCH" if abs(pct_change) < 3 else "RISK",
+    )
+    WATCHLIST.append(item)
+    return item
+
+
 @app.get("/market/quotes")
 def quotes(symbols: str = Query(default="")):
     requested = [symbol.strip().upper() for symbol in symbols.split(",") if symbol.strip()]
@@ -155,6 +182,128 @@ def source_statuses():
 @app.get("/portfolio/holdings")
 def holdings() -> list[Holding]:
     return HOLDINGS
+
+
+@app.get("/advice/holdings")
+def holding_advice() -> list[HoldingAdvice]:
+    account_total = max(_account_total(), 1)
+    advice: list[HoldingAdvice] = []
+    for holding in HOLDINGS:
+        cost_basis = max(holding.avg_cost * holding.qty, 0.01)
+        pnl_pct = holding.pnl / cost_basis * 100
+        current_weight = holding.market_value / account_total
+        if pnl_pct <= -35:
+            action = "减仓/禁止补仓"
+            risk_level = "high"
+            confidence = 0.82
+            target = min(current_weight, 0.03)
+            reason = f"持仓亏损 {pnl_pct:.1f}%，已超过纪律线，先控制单票风险。"
+        elif pnl_pct <= -15:
+            action = "持有观察"
+            risk_level = "medium"
+            confidence = 0.68
+            target = min(current_weight, 0.05)
+            reason = f"持仓亏损 {pnl_pct:.1f}%，等待模型转强或止损条件确认。"
+        elif current_weight > 0.12:
+            action = "降低集中度"
+            risk_level = "medium"
+            confidence = 0.64
+            target = 0.08
+            reason = f"当前权重 {current_weight * 100:.1f}%，超过单票观察上限。"
+        else:
+            action = "继续跟踪"
+            risk_level = "low"
+            confidence = 0.55
+            target = max(current_weight, 0.02)
+            reason = "未触发强制卖出条件，继续用模型信号跟踪。"
+        advice.append(
+            HoldingAdvice(
+                ticker=holding.ticker,
+                broker=holding.broker,
+                action=action,
+                confidence=confidence,
+                reason=reason,
+                risk_level=risk_level,
+                suggested_weight=round(target * 100, 2),
+            )
+        )
+    return advice
+
+
+@app.get("/screening/candidates")
+def screening_candidates() -> list[CandidateStock]:
+    existing = {item.ticker.replace(".US", "") for item in WATCHLIST}
+    candidates = [
+        CandidateStock(ticker="MSFT", name="Microsoft", sector="Software", score=86, reason="盈利质量稳定，适合作为大盘科技核心观察。", action="加入监控"),
+        CandidateStock(ticker="GOOGL", name="Alphabet", sector="Communication", score=84, reason="估值与现金流相对均衡，适合 PE/ROI 双模型跟踪。", action="加入监控"),
+        CandidateStock(ticker="AMZN", name="Amazon", sector="Consumer/Cloud", score=79, reason="增长和趋势因子较强，适合 PEG_v1 观察。", action="观察等待"),
+        CandidateStock(ticker="QQQ", name="Nasdaq 100 ETF", sector="ETF", score=76, reason="可作为科技仓位基准和现金替代观察。", action="加入监控"),
+        CandidateStock(ticker="SPY", name="S&P 500 ETF", sector="ETF", score=72, reason="用于基准、风险对冲和组合回撤参照。", action="加入监控"),
+    ]
+    return [candidate for candidate in candidates if candidate.ticker not in existing]
+
+
+@app.get("/portfolio/optimization")
+def portfolio_optimization() -> PortfolioOptimization:
+    account_total = max(_account_total(), 1)
+    cash_target = round(account_total * 0.12, 2)
+    suggestions: list[AllocationSuggestion] = []
+    target_weights = {"NOK.US": 0.04, "NOK": 0.03, "SMR.US": 0.02, "IAU": 0.08, "NVDA": 0.02}
+    for holding in HOLDINGS:
+        current_weight = holding.market_value / account_total
+        target_weight = target_weights.get(holding.ticker, 0.03)
+        diff = round((target_weight - current_weight) * account_total, 2)
+        if diff > 25:
+            action = "可小额补足"
+        elif diff < -25:
+            action = "减仓释放现金"
+        else:
+            action = "维持"
+        suggestions.append(
+            AllocationSuggestion(
+                ticker=holding.ticker,
+                current_weight=round(current_weight * 100, 2),
+                target_weight=round(target_weight * 100, 2),
+                action=action,
+                amount=abs(diff),
+                reason="目标权重来自当前风控：高回撤标的降权，黄金 ETF 保留防守仓。",
+            )
+        )
+    cash_action = "现金过低，暂停新增买入" if CASH_BALANCE < cash_target else "现金充足，可按模型分批"
+    return PortfolioOptimization(
+        account_total=round(account_total, 2),
+        cash_balance=CASH_BALANCE,
+        cash_target=cash_target,
+        cash_action=cash_action,
+        suggestions=suggestions,
+    )
+
+
+@app.get("/models/validation")
+def model_validation() -> list[ModelValidationItem]:
+    output: list[ModelValidationItem] = []
+    for strategy in STRATEGIES:
+        results = [run_backtest(strategy.id, item.ticker, "2026-05-01", "2026-07-16") for item in WATCHLIST]
+        best = max(results, key=lambda result: result.annual_return)
+        avg_return = sum(result.annual_return for result in results) / max(len(results), 1)
+        avg_drawdown = sum(result.max_drawdown for result in results) / max(len(results), 1)
+        if avg_drawdown < -35:
+            note = "回撤过大，调低单票权重并提高止损敏感度。"
+        elif avg_return < 0:
+            note = "收益不足，减少逆势补仓，增加趋势确认。"
+        else:
+            note = "可保留当前参数，继续扩大样本观察。"
+        output.append(
+            ModelValidationItem(
+                strategy_id=strategy.id,
+                tested=len(results),
+                best_ticker=best.ticker,
+                average_annual_return=round(avg_return, 2),
+                average_max_drawdown=round(avg_drawdown, 2),
+                tuning_note=note,
+            )
+        )
+    return output
 
 
 @app.get("/signals")

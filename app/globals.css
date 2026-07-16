@@ -696,6 +696,89 @@ td span {
   justify-content: flex-end;
 }
 
+.add-stock-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 160px;
+  gap: 10px;
+  margin-bottom: 14px;
+  align-items: end;
+}
+
+.advice-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.advice-card {
+  min-height: 150px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(7, 14, 22, 0.74);
+}
+
+.advice-card.high {
+  border-color: rgba(255, 95, 148, 0.28);
+  background: rgba(255, 95, 148, 0.1);
+}
+
+.advice-card.medium {
+  border-color: rgba(245, 195, 87, 0.28);
+  background: rgba(245, 195, 87, 0.08);
+}
+
+.advice-card.low {
+  border-color: rgba(24, 210, 176, 0.28);
+  background: rgba(24, 210, 176, 0.08);
+}
+
+.advice-card strong,
+.advice-card b,
+.advice-card span {
+  display: block;
+}
+
+.advice-card b {
+  margin-top: 10px;
+  color: var(--green);
+  font-size: 22px;
+}
+
+.advice-card span {
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.advice-card p {
+  margin-top: 10px;
+  color: #c3ced9;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.advice-card button {
+  margin-top: 12px;
+  padding: 0 12px;
+}
+
+.allocation-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+  padding: 14px;
+  border: 1px solid rgba(245, 195, 87, 0.28);
+  border-radius: 7px;
+  background: rgba(245, 195, 87, 0.08);
+}
+
+.allocation-summary span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .analysis-form {
   display: grid;
   grid-template-columns: 1.3fr 1.2fr 1fr repeat(2, 1fr) 1.2fr;
@@ -785,7 +868,7 @@ select, input {
   .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .analysis-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .broker-grid { grid-template-columns: 1fr; }
-  .source-grid, .quote-grid { grid-template-columns: 1fr; }
+  .source-grid, .quote-grid, .advice-grid { grid-template-columns: 1fr; }
   .execution-panel { grid-template-columns: 1fr; }
 }
 
@@ -795,6 +878,7 @@ select, input {
   .actions { flex-wrap: wrap; }
   .page-grid, .result-grid { grid-template-columns: 1fr; }
   .strategy-card { grid-column: 1; }
-  .flow, .analysis-form { grid-template-columns: 1fr; }
+  .flow, .analysis-form, .add-stock-row { grid-template-columns: 1fr; }
+  .allocation-summary { flex-direction: column; }
   table { display: block; overflow-x: auto; white-space: nowrap; }
 }

@@ -202,6 +202,57 @@ class WatchlistItem(BaseModel):
     signal: str
 
 
+class AddWatchlistRequest(BaseModel):
+    ticker: str
+    name: str = ""
+    sector: str = "User Added"
+
+
+class HoldingAdvice(BaseModel):
+    ticker: str
+    broker: str
+    action: str
+    confidence: float
+    reason: str
+    risk_level: Literal["low", "medium", "high"]
+    suggested_weight: float
+
+
+class CandidateStock(BaseModel):
+    ticker: str
+    name: str
+    sector: str
+    score: int
+    reason: str
+    action: str
+
+
+class AllocationSuggestion(BaseModel):
+    ticker: str
+    current_weight: float
+    target_weight: float
+    action: str
+    amount: float
+    reason: str
+
+
+class PortfolioOptimization(BaseModel):
+    account_total: float
+    cash_balance: float
+    cash_target: float
+    cash_action: str
+    suggestions: list[AllocationSuggestion]
+
+
+class ModelValidationItem(BaseModel):
+    strategy_id: str
+    tested: int
+    best_ticker: str
+    average_annual_return: float
+    average_max_drawdown: float
+    tuning_note: str
+
+
 class DisciplineEvent(BaseModel):
     id: str
     ticker: str

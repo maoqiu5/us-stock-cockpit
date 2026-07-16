@@ -189,6 +189,51 @@ type PreviousCloseImportResult = {
   warnings: string[];
 };
 
+type HoldingAdvice = {
+  ticker: string;
+  broker: string;
+  action: string;
+  confidence: number;
+  reason: string;
+  risk_level: "low" | "medium" | "high";
+  suggested_weight: number;
+};
+
+type CandidateStock = {
+  ticker: string;
+  name: string;
+  sector: string;
+  score: number;
+  reason: string;
+  action: string;
+};
+
+type AllocationSuggestion = {
+  ticker: string;
+  current_weight: number;
+  target_weight: number;
+  action: string;
+  amount: number;
+  reason: string;
+};
+
+type PortfolioOptimization = {
+  account_total: number;
+  cash_balance: number;
+  cash_target: number;
+  cash_action: string;
+  suggestions: AllocationSuggestion[];
+};
+
+type ModelValidationItem = {
+  strategy_id: string;
+  tested: number;
+  best_ticker: string;
+  average_annual_return: number;
+  average_max_drawdown: number;
+  tuning_note: string;
+};
+
 type BacktestResult = {
   strategy_id: string;
   ticker: string;
@@ -214,6 +259,9 @@ type AppData = {
   quotes: MarketQuote[];
   sources: DataSourceStatus[];
   holdings: Holding[];
+  holdingAdvice: HoldingAdvice[];
+  candidates: CandidateStock[];
+  allocation: PortfolioOptimization | null;
 };
 
 const nav = [
@@ -277,9 +325,14 @@ export default function Home() {
     execution: null,
     quotes: [],
     sources: [],
-    holdings: []
+    holdings: [],
+    holdingAdvice: [],
+    candidates: [],
+    allocation: null
   });
+  const [newTicker, setNewTicker] = useState("");
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
+  const [validation, setValidation] = useState<ModelValidationItem[]>([]);
   const [selectedStrategy, setSelectedStrategy] = useState("pe_v1");
   const [selectedTicker, setSelectedTicker] = useState("NOK.US");
   const [analysisType, setAnalysisType] = useState("offline");
@@ -293,7 +346,7 @@ export default function Home() {
     if (loadingRef.current) return;
     loadingRef.current = true;
     try {
-      const [summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings] = await Promise.all([
+      const [summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings, holdingAdvice, candidates, allocation] = await Promise.all([
         fetchJson<DashboardSummary>("/dashboard/summary"),
         fetchJson<StrategyModel[]>("/strategies"),
         fetchJson<WatchlistItem[]>("/watchlist"),
@@ -304,9 +357,12 @@ export default function Home() {
         fetchJson<ExecutionConfig>("/execution/config"),
         fetchJson<MarketQuote[]>("/market/quotes"),
         fetchJson<DataSourceStatus[]>("/data-sources/status"),
-        fetchJson<Holding[]>("/portfolio/holdings")
+        fetchJson<Holding[]>("/portfolio/holdings"),
+        fetchJson<HoldingAdvice[]>("/advice/holdings"),
+        fetchJson<CandidateStock[]>("/screening/candidates"),
+        fetchJson<PortfolioOptimization>("/portfolio/optimization")
       ]);
-      setData({ summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings });
+      setData({ summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings, holdingAdvice, candidates, allocation });
       setLoading(false);
     } finally {
       loadingRef.current = false;
@@ -434,6 +490,24 @@ export default function Home() {
     setActive("analysis");
   }
 
+  async function addStockToWatchlist(ticker: string) {
+    const normalized = ticker.trim().toUpperCase();
+    if (!normalized) return;
+    await fetchJson<WatchlistItem>("/watchlist", {
+      method: "POST",
+      body: JSON.stringify({ ticker: normalized })
+    });
+    setNewTicker("");
+    await load();
+    setNotice(`${normalized} 已加入股票池，系统会纳入行情、候选跟踪和模型评测。`);
+  }
+
+  async function validateModels() {
+    const result = await fetchJson<ModelValidationItem[]>("/models/validation");
+    setValidation(result);
+    setNotice(`已验证 ${result.length} 个策略模型，结果已更新到股票池页。`);
+  }
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -498,7 +572,22 @@ export default function Home() {
           />
         )}
         {active === "strategies" && <Strategies strategies={data.strategies} />}
-        {active === "watchlist" && <Watchlist items={data.watchlist} quotes={data.quotes} load={load} importPreviousClose={importPreviousClose} />}
+        {active === "watchlist" && (
+          <Watchlist
+            items={data.watchlist}
+            quotes={data.quotes}
+            holdingAdvice={data.holdingAdvice}
+            candidates={data.candidates}
+            allocation={data.allocation}
+            validation={validation}
+            newTicker={newTicker}
+            setNewTicker={setNewTicker}
+            addStockToWatchlist={addStockToWatchlist}
+            load={load}
+            importPreviousClose={importPreviousClose}
+            validateModels={validateModels}
+          />
+        )}
         {active === "discipline" && (
           <Discipline
             events={data.events}
@@ -722,65 +811,187 @@ function Strategies({ strategies }: { strategies: StrategyModel[] }) {
   );
 }
 
-function Watchlist({ items, quotes, load, importPreviousClose }: { items: WatchlistItem[]; quotes: MarketQuote[]; load: () => Promise<void>; importPreviousClose: () => Promise<PreviousCloseImportResult> }) {
+function Watchlist({
+  items,
+  quotes,
+  holdingAdvice,
+  candidates,
+  allocation,
+  validation,
+  newTicker,
+  setNewTicker,
+  addStockToWatchlist,
+  load,
+  importPreviousClose,
+  validateModels
+}: {
+  items: WatchlistItem[];
+  quotes: MarketQuote[];
+  holdingAdvice: HoldingAdvice[];
+  candidates: CandidateStock[];
+  allocation: PortfolioOptimization | null;
+  validation: ModelValidationItem[];
+  newTicker: string;
+  setNewTicker: (value: string) => void;
+  addStockToWatchlist: (ticker: string) => Promise<void>;
+  load: () => Promise<void>;
+  importPreviousClose: () => Promise<PreviousCloseImportResult>;
+  validateModels: () => Promise<void>;
+}) {
   const quoteMap = new Map(quotes.map((quote) => [quote.ticker, quote]));
   return (
     <div className="page-grid">
-    <section className="panel full">
-      <div className="panel-head">
-        <div>
-          <h2>真实持仓股票池</h2>
-          <p>开盘前可先导入上一交易日收盘价，用昨收估值跑纪律模型和回测。</p>
+      <section className="panel full">
+        <div className="panel-head">
+          <div>
+            <h2>真实持仓与选股池</h2>
+            <p>这里同时管理当前持仓、候选股票、实时纪律建议和模型验证，不会自动下单。</p>
+          </div>
+          <div className="button-row">
+            <button onClick={load}>刷新行情</button>
+            <button onClick={importPreviousClose}>导入昨收</button>
+            <button onClick={validateModels}>验证模型</button>
+          </div>
         </div>
-        <div className="button-row">
-          <button onClick={load}>刷新行情</button>
-          <button onClick={importPreviousClose}>导入昨收</button>
+        <div className="add-stock-row">
+          <label>新增监控股票
+            <input value={newTicker} onChange={(event) => setNewTicker(event.target.value)} placeholder="例如 MSFT / GOOGL / QQQ" />
+          </label>
+          <button className="primary" onClick={() => addStockToWatchlist(newTicker)}>加入股票池</button>
         </div>
-      </div>
-      <table>
-        <thead>
-          <tr><th>股票</th><th>现价</th><th>涨跌</th><th>PE</th><th>PEG</th><th>ROI</th><th>增长</th><th>趋势</th><th>资格</th><th>信号</th></tr>
-        </thead>
-        <tbody>
-          {items.map((item) => {
-            const quote = quoteMap.get(item.ticker);
-            return (
-              <tr key={item.ticker}>
-                <td><b>{item.ticker}</b><span>{item.name}</span></td>
-                <td>{quote ? fmtMoney(quote.price) : "-"}</td>
-                <td className={quote && quote.pct_change < 0 ? "negative" : "positive"}>{quote ? pct(quote.pct_change) : "-"}</td>
-                <td>{item.pe}</td>
-                <td>{item.peg}</td>
-                <td>{pct(item.roi)}</td>
-                <td>{pct(item.growth)}</td>
-                <td>{item.trend}</td>
-                <td>{item.eligible ? "可交易" : "观察"}</td>
-                <td><em>{item.signal}</em></td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </section>
-    <section className="panel wide">
-      <div className="panel-head">
-        <div>
-          <h2>行情缓存</h2>
-          <p>AKShare 可用时读取公开美股报价；不可用时回退到样例缓存，保证策略和 UI 可持续运行。</p>
+        <table>
+          <thead>
+            <tr><th>股票</th><th>现价</th><th>涨跌</th><th>PE</th><th>PEG</th><th>ROI</th><th>增长</th><th>趋势</th><th>资格</th><th>信号</th></tr>
+          </thead>
+          <tbody>
+            {items.map((item) => {
+              const quote = quoteMap.get(item.ticker);
+              return (
+                <tr key={item.ticker}>
+                  <td><b>{item.ticker}</b><span>{item.name}</span></td>
+                  <td>{quote ? fmtMoney(quote.price) : "-"}</td>
+                  <td className={quote && quote.pct_change < 0 ? "negative" : "positive"}>{quote ? pct(quote.pct_change) : "-"}</td>
+                  <td>{item.pe}</td>
+                  <td>{item.peg}</td>
+                  <td>{pct(item.roi)}</td>
+                  <td>{pct(item.growth)}</td>
+                  <td>{item.trend}</td>
+                  <td>{item.eligible ? "可交易" : "观察"}</td>
+                  <td><em>{item.signal}</em></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="panel wide">
+        <div className="panel-head">
+          <div>
+            <h2>持仓实时交易建议</h2>
+            <p>根据持仓盈亏、仓位集中度和风控纪律生成，只用于决策提示。</p>
+          </div>
+          <span className="badge">{holdingAdvice.length} 条</span>
         </div>
-        <span className="badge">{quotes[0]?.source || "sample-fallback"}</span>
-      </div>
-      <div className="quote-grid">
-        {quotes.map((quote) => (
-          <article key={quote.ticker}>
-            <strong>{quote.ticker}</strong>
-            <b>{fmtMoney(quote.price)}</b>
-            <span className={quote.pct_change < 0 ? "negative" : "positive"}>{pct(quote.pct_change)}</span>
-            <small>{quote.source} · {quote.updated_at}</small>
-          </article>
-        ))}
-      </div>
-    </section>
+        <div className="advice-grid">
+          {holdingAdvice.map((item) => (
+            <article key={`${item.broker}-${item.ticker}`} className={`advice-card ${item.risk_level}`}>
+              <strong>{item.ticker}</strong>
+              <b>{item.action}</b>
+              <span>建议权重 {item.suggested_weight.toFixed(2)}% · 置信 {Math.round(item.confidence * 100)}%</span>
+              <p>{item.reason}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel wide">
+        <div className="panel-head">
+          <div>
+            <h2>候选股发现</h2>
+            <p>用于寻找适合加入监控的标的，加入后进入同一套行情、信号和回测流程。</p>
+          </div>
+          <span className="badge">{candidates.length} 个候选</span>
+        </div>
+        <div className="advice-grid">
+          {candidates.map((candidate) => (
+            <article key={candidate.ticker} className="advice-card">
+              <strong>{candidate.ticker} · {candidate.name}</strong>
+              <b>{candidate.score}</b>
+              <span>{candidate.sector} · {candidate.action}</span>
+              <p>{candidate.reason}</p>
+              <button onClick={() => addStockToWatchlist(candidate.ticker)}>加入监控</button>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel wide">
+        <div className="panel-head">
+          <div>
+            <h2>账户余额与仓位优化</h2>
+            <p>按当前账户余额、持仓市值和风险纪律给出动态配仓方向。</p>
+          </div>
+          <span className="badge">{allocation ? fmtMoney(allocation.cash_balance) : "$0.00"} 现金</span>
+        </div>
+        {allocation && (
+          <>
+            <div className="allocation-summary">
+              <strong>{allocation.cash_action}</strong>
+              <span>账户 {fmtMoney(allocation.account_total)} · 目标现金 {fmtMoney(allocation.cash_target)}</span>
+            </div>
+            <div className="compact-table">
+              {allocation.suggestions.map((item) => (
+                <div key={item.ticker}>
+                  <span>{item.ticker} · 当前 {item.current_weight.toFixed(2)}% / 目标 {item.target_weight.toFixed(2)}%</span>
+                  <b>{item.action}</b>
+                  <em>{fmtMoney(item.amount)}</em>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </section>
+
+      <section className="panel wide">
+        <div className="panel-head">
+          <div>
+            <h2>模型验证与调教</h2>
+            <p>点击“验证模型”后，用当前股票池批量回测三套策略，并给出参数调教方向。</p>
+          </div>
+          <span className="badge">{validation.length ? `${validation.length} 个模型` : "等待验证"}</span>
+        </div>
+        <div className="advice-grid">
+          {validation.map((item) => (
+            <article key={item.strategy_id} className="advice-card">
+              <strong>{item.strategy_id}</strong>
+              <b>{pct(item.average_annual_return)}</b>
+              <span>最佳 {item.best_ticker} · 平均回撤 {pct(item.average_max_drawdown)} · 样本 {item.tested}</span>
+              <p>{item.tuning_note}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel wide">
+        <div className="panel-head">
+          <div>
+            <h2>行情缓存</h2>
+            <p>AKShare 可用时读取公开美股报价；不可用时回退到样例缓存，保证策略和 UI 可持续运行。</p>
+          </div>
+          <span className="badge">{quotes[0]?.source || "sample-fallback"}</span>
+        </div>
+        <div className="quote-grid">
+          {quotes.map((quote) => (
+            <article key={quote.ticker}>
+              <strong>{quote.ticker}</strong>
+              <b>{fmtMoney(quote.price)}</b>
+              <span className={quote.pct_change < 0 ? "negative" : "positive"}>{pct(quote.pct_change)}</span>
+              <small>{quote.source} · {quote.updated_at}</small>
+            </article>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
