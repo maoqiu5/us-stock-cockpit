@@ -129,13 +129,13 @@ def test_market_quotes_use_previous_close_when_market_closed(monkeypatch):
     assert quotes[0].source == "Yahoo previous close"
 
 
-def test_gold_monitor_uses_uploaded_position_and_t1_rules():
+def test_gold_monitor_tracks_minsheng_accumulated_gold_plan():
     snapshot = gold_monitor_snapshot()
-    assert snapshot.fund_code == "002611"
-    assert snapshot.current_value == 10646.93
-    assert snapshot.holding_pnl_rate == -14.82
-    assert "T+1" in snapshot.trade_rule
-    assert snapshot.estimated_nav > 0
+    assert snapshot.product_name == "民生积存金"
+    assert snapshot.planned_capital == 10000
+    assert snapshot.live_price == 878.20
+    assert snapshot.estimated_grams > 11
+    assert "¥900" in snapshot.trade_rule
     assert snapshot.watch_points
 
 

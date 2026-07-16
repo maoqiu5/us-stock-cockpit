@@ -69,26 +69,29 @@ class MarketQuote(BaseModel):
 
 
 class GoldMonitor(BaseModel):
-    fund_code: str
-    fund_name: str
+    product_code: str
+    product_name: str
+    product_type: str
+    trading_status: str
     risk_level: str
     currency: str
-    current_value: float
-    estimated_units: float
-    cost_basis: float
-    cost_nav: float
-    latest_nav: float
-    latest_nav_date: str
-    estimated_nav: float
-    estimated_change_pct: float
-    estimated_time: str
-    yesterday_pnl: float
-    holding_pnl: float
-    holding_pnl_rate: float
-    cumulative_pnl: float
+    planned_capital: float
+    live_price: float
+    change: float
+    pct_change: float
+    day_high: float
+    day_low: float
+    reference_price: float
+    quote_time: str
+    min_purchase_amount: float
+    increment_amount: float
+    buy_fee_rate: float
+    estimated_grams: float
+    first_order_amount: float
+    first_order_grams: float
+    reserve_cash: float
     reference_symbol: str
     reference_name: str
-    reference_price: float
     reference_change_pct: float
     reference_time: str
     trade_rule: str

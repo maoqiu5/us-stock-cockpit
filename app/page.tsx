@@ -180,26 +180,29 @@ type ZABankScreenshotResult = {
 };
 
 type GoldMonitor = {
-  fund_code: string;
-  fund_name: string;
+  product_code: string;
+  product_name: string;
+  product_type: string;
+  trading_status: string;
   risk_level: string;
   currency: string;
-  current_value: number;
-  estimated_units: number;
-  cost_basis: number;
-  cost_nav: number;
-  latest_nav: number;
-  latest_nav_date: string;
-  estimated_nav: number;
-  estimated_change_pct: number;
-  estimated_time: string;
-  yesterday_pnl: number;
-  holding_pnl: number;
-  holding_pnl_rate: number;
-  cumulative_pnl: number;
+  planned_capital: number;
+  live_price: number;
+  change: number;
+  pct_change: number;
+  day_high: number;
+  day_low: number;
+  reference_price: number;
+  quote_time: string;
+  min_purchase_amount: number;
+  increment_amount: number;
+  buy_fee_rate: number;
+  estimated_grams: number;
+  first_order_amount: number;
+  first_order_grams: number;
+  reserve_cash: number;
   reference_symbol: string;
   reference_name: string;
-  reference_price: number;
   reference_change_pct: number;
   reference_time: string;
   trade_rule: string;
@@ -394,7 +397,7 @@ export default function Home() {
     if (loadingRef.current) return;
     loadingRef.current = true;
     try {
-      const [summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings, holdingAdvice, candidates, allocation, gold] = await Promise.all([
+      const [summary, strategies, watchlist, events, orders, risk, brokers, execution, sources, holdings, holdingAdvice, candidates, allocation, gold] = await Promise.all([
         fetchJson<DashboardSummary>("/dashboard/summary"),
         fetchJson<StrategyModel[]>("/strategies"),
         fetchJson<WatchlistItem[]>("/watchlist"),
@@ -403,7 +406,6 @@ export default function Home() {
         fetchJson<RiskStatus>("/risk/status"),
         fetchJson<BrokerCapability[]>("/brokers/capabilities"),
         fetchJson<ExecutionConfig>("/execution/config"),
-        fetchJson<MarketQuote[]>("/market/quotes"),
         fetchJson<DataSourceStatus[]>("/data-sources/status"),
         fetchJson<Holding[]>("/portfolio/holdings"),
         fetchJson<HoldingAdvice[]>("/advice/holdings"),
@@ -411,11 +413,19 @@ export default function Home() {
         fetchJson<PortfolioOptimization>("/portfolio/optimization"),
         fetchJson<GoldMonitor>("/gold/monitor")
       ]);
-      setData({ summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings, holdingAdvice, candidates, allocation, gold });
+      setData((current) => ({ ...current, summary, strategies, watchlist, events, orders, risk, brokers, execution, sources, holdings, holdingAdvice, candidates, allocation, gold }));
       setLoading(false);
+      fetchJson<MarketQuote[]>("/market/quotes")
+        .then((quotes) => setData((current) => ({ ...current, quotes })))
+        .catch(() => setNotice("行情刷新较慢，已先显示账户和策略数据。"));
     } finally {
       loadingRef.current = false;
     }
+  }, []);
+
+  const loadGold = useCallback(async () => {
+    const gold = await fetchJson<GoldMonitor>("/gold/monitor");
+    setData((current) => ({ ...current, gold }));
   }, []);
 
   useEffect(() => {
@@ -438,6 +448,13 @@ export default function Home() {
     }, 10_000);
     return () => window.clearInterval(timer);
   }, [load, marketSession.isOpen]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      loadGold().catch(() => setNotice("黄金盯盘刷新失败，正在保留最近一次数据。"));
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [loadGold]);
 
   useEffect(() => {
     runBacktest().catch(() => undefined);
@@ -649,7 +666,7 @@ export default function Home() {
             validateModels={validateModels}
           />
         )}
-        {active === "gold" && data.gold && <GoldWatch monitor={data.gold} load={load} />}
+        {active === "gold" && data.gold && <GoldWatch monitor={data.gold} loadGold={loadGold} />}
         {active === "discipline" && (
           <Discipline
             events={data.events}
@@ -1074,34 +1091,34 @@ function Watchlist({
   );
 }
 
-function GoldWatch({ monitor, load }: { monitor: GoldMonitor; load: () => Promise<void> }) {
+function GoldWatch({ monitor, loadGold }: { monitor: GoldMonitor; loadGold: () => Promise<void> }) {
   return (
     <div className="page-grid gold-page">
-      <Metric label="当前持有" value={fmtCny(monitor.current_value)} hint={`${monitor.fund_name} · ${monitor.fund_code}`} tone="amber" icon={Coins} />
-      <Metric label="昨日收益" value={fmtCny(monitor.yesterday_pnl)} hint={monitor.estimated_time} tone={monitor.yesterday_pnl < 0 ? "danger" : "green"} />
-      <Metric label="持有收益" value={fmtCny(monitor.holding_pnl)} hint={`持有收益率 ${pct(monitor.holding_pnl_rate)}`} tone={monitor.holding_pnl < 0 ? "danger" : "green"} />
-      <Metric label="估算净值" value={monitor.estimated_nav.toFixed(4)} hint={`${pct(monitor.estimated_change_pct)} · ${monitor.source}`} tone={monitor.estimated_change_pct < 0 ? "danger" : "green"} />
+      <Metric label="计划资金" value={fmtCny(monitor.planned_capital)} hint={`${monitor.product_name} · ${monitor.product_type}`} tone="amber" icon={Coins} />
+      <Metric label="实时金价" value={`¥${monitor.live_price.toFixed(2)}/克`} hint={`${monitor.trading_status} · ${monitor.quote_time}`} tone={monitor.pct_change < 0 ? "danger" : "green"} />
+      <Metric label="预计可买" value={`${monitor.estimated_grams.toFixed(4)} 克`} hint={`按 ${fmtCny(monitor.planned_capital)} / ¥${monitor.live_price.toFixed(2)}`} tone="green" />
+      <Metric label="首笔纪律" value={fmtCny(monitor.first_order_amount)} hint={`约 ${monitor.first_order_grams.toFixed(4)} 克，留存 ${fmtCny(monitor.reserve_cash)}`} tone="amber" />
 
       <section className="panel wide gold-hero">
         <div className="panel-head">
           <div>
-            <h2>博时黄金ETF联接C 盯盘</h2>
-            <p>基金代码 {monitor.fund_code}，按中国基金 T+1 确认规则跟踪；盘中估算净值只做提示，最终以收盘后净值记录。</p>
+            <h2>民生积存金盯盘</h2>
+            <p>{monitor.product_name} 当前按银行黄金实时买卖价跟踪，计划资金 {fmtCny(monitor.planned_capital)}；系统只做盯盘和纪律分析，不自动交易。</p>
           </div>
           <div className="button-row">
             <span className="badge">{monitor.risk_level}</span>
-            <button onClick={load}>刷新黄金数据</button>
+            <button onClick={loadGold}>刷新黄金数据</button>
           </div>
         </div>
         <div className="gold-layout">
           <div className="gold-position">
-            <span>当前持有</span>
-            <strong>{fmtCny(monitor.current_value)}</strong>
+            <span>当前金价</span>
+            <strong>¥{monitor.live_price.toFixed(2)}/克</strong>
             <dl>
-              <div><dt>估算份额</dt><dd>{monitor.estimated_units.toLocaleString("zh-CN")} 份</dd></div>
-              <div><dt>成本金额</dt><dd>{fmtCny(monitor.cost_basis)}</dd></div>
-              <div><dt>成本净值</dt><dd>{monitor.cost_nav.toFixed(4)}</dd></div>
-              <div><dt>最新净值</dt><dd>{monitor.latest_nav.toFixed(4)} · {monitor.latest_nav_date}</dd></div>
+              <div><dt>今日涨跌</dt><dd>{monitor.change.toFixed(2)} / {pct(monitor.pct_change)}</dd></div>
+              <div><dt>日内高低</dt><dd>{monitor.day_high.toFixed(2)} / {monitor.day_low.toFixed(2)}</dd></div>
+              <div><dt>1万预计</dt><dd>{monitor.estimated_grams.toFixed(4)} 克</dd></div>
+              <div><dt>买入规则</dt><dd>{fmtCny(monitor.min_purchase_amount)} 起，{fmtCny(monitor.increment_amount)} 递增</dd></div>
             </dl>
           </div>
           <div className="gold-advice">
@@ -1116,7 +1133,7 @@ function GoldWatch({ monitor, load }: { monitor: GoldMonitor; load: () => Promis
       <section className="panel wide">
         <div className="panel-head">
           <div>
-            <h2>T+1 交易纪律</h2>
+            <h2>交易纪律</h2>
             <p>{monitor.settlement_rule}</p>
           </div>
           <span className="badge">{monitor.trade_rule}</span>
@@ -1136,28 +1153,28 @@ function GoldWatch({ monitor, load }: { monitor: GoldMonitor; load: () => Promis
         <div className="panel-head">
           <div>
             <h2>黄金参考指标</h2>
-            <p>联接基金会滞后跟随底层黄金 ETF 和金价，参考指标只用于判断方向，不作为成交价。</p>
+            <p>银行黄金报价以 App 最终确认为准；这里用截图价建立本地跟踪基准，后续可替换为民生接口适配器。</p>
           </div>
           <span className="badge">{monitor.reference_symbol}</span>
         </div>
         <div className="quote-grid">
           <article>
             <strong>{monitor.reference_name}</strong>
-            <b>¥{monitor.reference_price.toFixed(4)}</b>
+            <b>¥{monitor.reference_price.toFixed(2)}</b>
             <span className={monitor.reference_change_pct < 0 ? "negative" : "positive"}>{pct(monitor.reference_change_pct)}</span>
             <small>{monitor.reference_time}</small>
           </article>
           <article>
-            <strong>基金最新净值</strong>
-            <b>{monitor.latest_nav.toFixed(4)}</b>
-            <span>{monitor.latest_nav_date}</span>
-            <small>最终记录口径</small>
+            <strong>首笔试探</strong>
+            <b>{fmtCny(monitor.first_order_amount)}</b>
+            <span>{monitor.first_order_grams.toFixed(4)} 克</span>
+            <small>按当前价估算，成交以银行确认为准</small>
           </article>
           <article>
-            <strong>累计盈亏</strong>
-            <b>{fmtCny(monitor.cumulative_pnl)}</b>
-            <span className="positive">历史累计收益</span>
-            <small>来自你上传的持仓截图</small>
+            <strong>剩余弹药</strong>
+            <b>{fmtCny(monitor.reserve_cash)}</b>
+            <span className="positive">用于后续价位台阶</span>
+            <small>{monitor.source}</small>
           </article>
         </div>
       </section>
