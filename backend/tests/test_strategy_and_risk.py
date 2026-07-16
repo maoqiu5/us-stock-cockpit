@@ -1,6 +1,7 @@
 from backend.app.models import OrderRequest, Side
 import backend.app.main as main_module
 from backend.app.broker import USmartBrokerAdapter
+import backend.app.data_sources as data_sources_module
 from backend.app.data_sources import market_quotes
 from backend.app.main import import_broker_records
 from backend.app.models import AddWatchlistRequest, BrokerImportRecord, BrokerImportRequest, MarketQuote
@@ -96,6 +97,35 @@ def test_market_quotes_fallback_returns_requested_symbol():
     quotes = market_quotes(["NOK.US"])
     assert quotes[0].ticker == "NOK.US"
     assert quotes[0].price > 0
+
+
+def test_market_quotes_use_previous_close_when_market_closed(monkeypatch):
+    monkeypatch.setattr(data_sources_module, "is_us_market_open", lambda: False)
+    monkeypatch.setattr(
+        data_sources_module,
+        "previous_close_quotes",
+        lambda tickers: (
+            [
+                MarketQuote(
+                    ticker=ticker,
+                    name=f"{ticker} Test",
+                    price=394.46,
+                    change=-1.72,
+                    pct_change=-0.43,
+                    volume=0,
+                    source="Yahoo previous close",
+                    delay_seconds=0,
+                    updated_at="07/15 16:00",
+                )
+                for ticker in tickers
+            ],
+            [],
+        ),
+    )
+    quotes = market_quotes(["TSLA"])
+    assert quotes[0].ticker == "TSLA"
+    assert quotes[0].price == 394.46
+    assert quotes[0].source == "Yahoo previous close"
 
 
 def test_previous_close_import_updates_holdings(monkeypatch):

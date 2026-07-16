@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Iterable
 
 from .models import DataSourceStatus, MarketQuote
+from .historical_prices import is_us_market_open, previous_close_quotes
 from .seed import WATCHLIST
 
 
@@ -48,6 +49,9 @@ def data_source_statuses() -> list[DataSourceStatus]:
 
 def market_quotes(symbols: Iterable[str] | None = None) -> list[MarketQuote]:
     tickers = [symbol.upper() for symbol in (symbols or FALLBACK_PRICES.keys())]
+    if not is_us_market_open():
+        quotes, _ = previous_close_quotes(tickers)
+        return quotes
     try:
         return _akshare_quotes(tickers)
     except Exception:
