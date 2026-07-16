@@ -15,7 +15,7 @@ import {
   SlidersHorizontal,
   WalletCards
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 const USMART_SCREENSHOT_PATH =
@@ -232,6 +232,28 @@ const pct = (value: number) => `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 const defaultPriceForTicker = (ticker: string) =>
   ({ "NOK.US": 11.23, "SMR.US": 8.36, NOK: 11.25, IAU: 76.28, NVDA: 212.5 }[ticker] || 100);
 
+function getUSMarketSession(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(now);
+  const value = (type: string) => parts.find((part) => part.type === type)?.value || "";
+  const weekday = value("weekday");
+  const hour = Number(value("hour"));
+  const minute = Number(value("minute"));
+  const minutes = hour * 60 + minute;
+  const isWeekday = !["Sat", "Sun"].includes(weekday);
+  const isOpen = isWeekday && minutes >= 9 * 60 + 30 && minutes < 16 * 60;
+  return {
+    isOpen,
+    label: isOpen ? "NYSE Open" : "NYSE Closed",
+    refreshLabel: isOpen ? "10秒自动刷新" : "开盘后10秒刷新"
+  };
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -264,31 +286,53 @@ export default function Home() {
   const [preparedOrder, setPreparedOrder] = useState<PreparedOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
+  const [marketSession, setMarketSession] = useState(() => getUSMarketSession());
+  const loadingRef = useRef(false);
 
-  const load = async () => {
-    const [summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings] = await Promise.all([
-      fetchJson<DashboardSummary>("/dashboard/summary"),
-      fetchJson<StrategyModel[]>("/strategies"),
-      fetchJson<WatchlistItem[]>("/watchlist"),
-      fetchJson<DisciplineEvent[]>("/discipline/events"),
-      fetchJson<Order[]>("/orders"),
-      fetchJson<RiskStatus>("/risk/status"),
-      fetchJson<BrokerCapability[]>("/brokers/capabilities"),
-      fetchJson<ExecutionConfig>("/execution/config"),
-      fetchJson<MarketQuote[]>("/market/quotes"),
-      fetchJson<DataSourceStatus[]>("/data-sources/status"),
-      fetchJson<Holding[]>("/portfolio/holdings")
-    ]);
-    setData({ summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings });
-    setLoading(false);
-  };
+  const load = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    try {
+      const [summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings] = await Promise.all([
+        fetchJson<DashboardSummary>("/dashboard/summary"),
+        fetchJson<StrategyModel[]>("/strategies"),
+        fetchJson<WatchlistItem[]>("/watchlist"),
+        fetchJson<DisciplineEvent[]>("/discipline/events"),
+        fetchJson<Order[]>("/orders"),
+        fetchJson<RiskStatus>("/risk/status"),
+        fetchJson<BrokerCapability[]>("/brokers/capabilities"),
+        fetchJson<ExecutionConfig>("/execution/config"),
+        fetchJson<MarketQuote[]>("/market/quotes"),
+        fetchJson<DataSourceStatus[]>("/data-sources/status"),
+        fetchJson<Holding[]>("/portfolio/holdings")
+      ]);
+      setData({ summary, strategies, watchlist, events, orders, risk, brokers, execution, quotes, sources, holdings });
+      setLoading(false);
+    } finally {
+      loadingRef.current = false;
+    }
+  }, []);
 
   useEffect(() => {
     load().catch(() => {
       setLoading(false);
       setNotice("后端暂未连接，正在显示前端骨架。");
     });
+  }, [load]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setMarketSession(getUSMarketSession()), 30_000);
+    return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!marketSession.isOpen) return undefined;
+    load().catch(() => setNotice("自动刷新失败，正在保留最近一次数据。"));
+    const timer = window.setInterval(() => {
+      load().catch(() => setNotice("自动刷新失败，正在保留最近一次数据。"));
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [load, marketSession.isOpen]);
 
   useEffect(() => {
     runBacktest().catch(() => undefined);
@@ -428,7 +472,8 @@ export default function Home() {
           <h1>{nav.find((item) => item.id === active)?.label}</h1>
           <div className="actions">
             <span className="pill local">本地纪律模式</span>
-            <span className="pill">NYSE Open</span>
+            <span className="pill">{marketSession.label}</span>
+            <span className="pill">{marketSession.refreshLabel}</span>
             <button className="sync">登录同步</button>
             <button className="sync" onClick={() => data.summary && toggleAutomation(data.summary.automation_paused)}>
               {data.summary?.automation_paused ? <Play size={15} /> : <CirclePause size={15} />}
