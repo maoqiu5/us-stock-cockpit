@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.request import Request, urlopen
 
 from .models import MarketQuote
@@ -15,6 +15,8 @@ PREVIOUS_CLOSE_FALLBACK = {
     "NVDA": ("NVDA", 212.5, 0.7, 0.33),
 }
 
+_DAILY_CLOSE_CACHE: dict[tuple[str, str, str], list[tuple[str, float]]] = {}
+
 
 def previous_close_quotes(tickers: list[str]) -> tuple[list[MarketQuote], list[str]]:
     quotes: list[MarketQuote] = []
@@ -26,6 +28,35 @@ def previous_close_quotes(tickers: list[str]) -> tuple[list[MarketQuote], list[s
             warnings.append(f"{ticker}_YAHOO_FALLBACK:{type(exc).__name__}")
             quotes.append(_fallback_previous_close(ticker))
     return quotes, warnings
+
+
+def daily_close_series(ticker: str, start_date: str, end_date: str) -> list[tuple[str, float]]:
+    cache_key = (ticker, start_date, end_date)
+    if cache_key in _DAILY_CLOSE_CACHE:
+        return _DAILY_CLOSE_CACHE[cache_key]
+    yahoo_symbol = _yahoo_symbol(ticker)
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    # Yahoo's period2 is exclusive; add one day so the requested end date is included.
+    end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}"
+        f"?period1={int(start.timestamp())}&period2={int(end.timestamp())}&interval=1d"
+    )
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(request, timeout=12) as response:
+        payload = json.load(response)
+    result = payload["chart"]["result"][0]
+    timestamps = result["timestamp"]
+    closes = result["indicators"]["quote"][0]["close"]
+    series = [
+        (datetime.fromtimestamp(ts).strftime("%Y-%m-%d"), round(float(close), 4))
+        for ts, close in zip(timestamps, closes)
+        if close is not None
+    ]
+    if len(series) < 2:
+        raise ValueError(f"insufficient historical closes for {ticker}")
+    _DAILY_CLOSE_CACHE[cache_key] = series
+    return series
 
 
 def _yahoo_previous_close(ticker: str) -> MarketQuote:

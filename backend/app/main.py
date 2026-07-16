@@ -89,7 +89,7 @@ def strategies():
 def backtest(strategy_id: str, request: BacktestRequest):
     if strategy_id not in {strategy.id for strategy in STRATEGIES}:
         raise HTTPException(status_code=404, detail="strategy not found")
-    return run_backtest(strategy_id, request.ticker)
+    return run_backtest(strategy_id, request.ticker, request.start_date, request.end_date)
 
 
 @app.get("/watchlist")
