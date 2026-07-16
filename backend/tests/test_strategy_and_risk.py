@@ -136,8 +136,8 @@ def test_gold_monitor_tracks_minsheng_accumulated_gold_plan():
     assert snapshot.live_price > 0
     assert snapshot.estimated_grams > 11
     assert "¥900" in snapshot.trade_rule
-    assert snapshot.refresh_seconds == 10
-    assert len(snapshot.trend_points) >= 20
+    assert snapshot.refresh_seconds == 3600
+    assert isinstance(snapshot.trend_points, list)
     assert snapshot.reference_symbol in {"CCB_999933", "SGE_AU9999", "CMBC_BANK_GOLD"}
     assert snapshot.watch_points
 

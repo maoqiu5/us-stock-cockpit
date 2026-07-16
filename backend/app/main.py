@@ -226,6 +226,11 @@ def gold_monitor() -> GoldMonitor:
     return gold_monitor_snapshot(GOLD_MANUAL_TRADES)
 
 
+@app.post("/gold/refresh")
+def refresh_gold_monitor() -> GoldMonitor:
+    return gold_monitor_snapshot(GOLD_MANUAL_TRADES, force_refresh=True)
+
+
 @app.get("/gold/manual-trades")
 def gold_manual_trades() -> list[GoldManualTrade]:
     return GOLD_MANUAL_TRADES

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -23,10 +23,12 @@ SCREENSHOT_REFERENCE = 878.17
 MIN_PURCHASE_AMOUNT = 900.0
 INCREMENT_AMOUNT = 1.0
 BUY_FEE_RATE = 0.0
+GOLD_REFRESH_SECONDS = 3600
+_QUOTE_CACHE: dict[str, dict | datetime | None] = {"quote": None, "fetched_at": None}
 
 
-def gold_monitor_snapshot(manual_trades: list[GoldManualTrade] | None = None) -> GoldMonitor:
-    quote = _minsheng_accumulated_gold_quote()
+def gold_monitor_snapshot(manual_trades: list[GoldManualTrade] | None = None, force_refresh: bool = False) -> GoldMonitor:
+    quote = _minsheng_accumulated_gold_quote(force_refresh=force_refresh)
     is_trading_session = quote["status"] == "交易中" or _is_bank_gold_trading_session()
     position = _gold_position_summary(manual_trades or [], quote["price"])
     first_order_amount = _first_order_amount(quote["price"], quote["pct_change"], position["remaining_capital"], position["holding_grams"])
@@ -72,7 +74,7 @@ def gold_monitor_snapshot(manual_trades: list[GoldManualTrade] | None = None) ->
         reference_change_pct=quote["pct_change"],
         reference_time=quote["time"],
         is_trading_session=is_trading_session,
-        refresh_seconds=10 if is_trading_session else 60,
+        refresh_seconds=GOLD_REFRESH_SECONDS,
         trend_points=_intraday_trend_points(quote),
         trade_rule="¥900 起购，¥1 递增；买入费率 0.00%，卖出按银行规则确认手续费。",
         settlement_rule="银行黄金支持实时买卖，成交价以支付成功后银行确认金价为准；不支持提取实物金。",
@@ -84,14 +86,27 @@ def gold_monitor_snapshot(manual_trades: list[GoldManualTrade] | None = None) ->
     )
 
 
-def _minsheng_accumulated_gold_quote() -> dict:
+def _minsheng_accumulated_gold_quote(force_refresh: bool = False) -> dict:
     # 民生/浙商/工银积存金暂无个人开放 API；先用建行主动积存公开分时价作为银行积存金实盘参考锚。
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    cached_quote = _QUOTE_CACHE["quote"]
+    fetched_at = _QUOTE_CACHE["fetched_at"]
+    if (
+        not force_refresh
+        and isinstance(cached_quote, dict)
+        and isinstance(fetched_at, datetime)
+        and now - fetched_at < timedelta(seconds=GOLD_REFRESH_SECONDS)
+    ):
+        return cached_quote
+
     for quote_loader in (_ccb_accumulated_gold_quote, _akshare_sge_gold_quote, _sina_sge_gold_quote):
         try:
-            return quote_loader()
+            quote = _merge_gold_quotes(cached_quote if isinstance(cached_quote, dict) else None, quote_loader())
+            _QUOTE_CACHE.update({"quote": quote, "fetched_at": now})
+            return quote
         except Exception:
             continue
-    return {
+    quote = {
         "price": SCREENSHOT_PRICE,
         "change": SCREENSHOT_CHANGE,
         "pct_change": SCREENSHOT_PCT_CHANGE,
@@ -105,6 +120,8 @@ def _minsheng_accumulated_gold_quote() -> dict:
         "trend_points": [],
         "source": "民生银行截图基准 / 实时接口预留",
     }
+    _QUOTE_CACHE.update({"quote": quote, "fetched_at": now})
+    return quote
 
 
 def _intraday_trend_points(quote: dict) -> list[dict[str, float | str]]:
@@ -221,10 +238,7 @@ def _sina_sge_gold_quote() -> dict:
 
 def _trend_points_from_ccb_rows(rows: list[dict]) -> list[dict[str, float | str]]:
     points: list[dict[str, float | str]] = []
-    last_index = len(rows) - 1
-    for index, row in enumerate(rows):
-        if index % 5 != 0 and index != last_index:
-            continue
+    for row in rows:
         raw_time = str(row["time"])
         label = _ccb_point_time_label(raw_time)
         points.append({"time": label, "price": round(float(row["new_pri"]), 2)})
@@ -233,16 +247,42 @@ def _trend_points_from_ccb_rows(rows: list[dict]) -> list[dict[str, float | str]
 
 def _trend_points_from_rows(frame) -> list[dict[str, float | str]]:
     points: list[dict[str, float | str]] = []
-    last_index = len(frame) - 1
-    for index, (_, row) in enumerate(frame.iterrows()):
-        if index % 5 != 0 and index != last_index:
-            continue
+    for _, row in frame.iterrows():
         raw_time = str(row["时间"])
-        time_label = raw_time[:5] if len(raw_time) >= 5 else raw_time
-        if index == last_index:
-            time_label = raw_time
+        time_label = raw_time
         points.append({"time": time_label, "price": round(float(row["现价"]), 2)})
     return points
+
+
+def _merge_gold_quotes(previous: dict | None, current: dict) -> dict:
+    if not previous or previous.get("symbol") != current.get("symbol"):
+        return current
+    if _quote_day(previous.get("time", "")) != _quote_day(current.get("time", "")):
+        return current
+
+    merged_points: dict[str, dict[str, float | str]] = {}
+    for point in previous.get("trend_points", []):
+        if isinstance(point, dict) and point.get("time") is not None:
+            merged_points[str(point["time"])] = point
+    for point in current.get("trend_points", []):
+        if isinstance(point, dict) and point.get("time") is not None:
+            merged_points[str(point["time"])] = point
+
+    current["trend_points"] = sorted(merged_points.values(), key=lambda point: _point_time_sort_key(str(point["time"])))
+    return current
+
+
+def _quote_day(label: str) -> str:
+    match = re.search(r"(\d{2}/\d{2})", label)
+    return match.group(1) if match else datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%m/%d")
+
+
+def _point_time_sort_key(label: str) -> tuple[int, int, int]:
+    match = re.search(r"(\d{2}):(\d{2})(?::(\d{2}))?", label)
+    if not match:
+        return (99, 99, 99)
+    hour, minute, second = match.groups()
+    return (int(hour), int(minute), int(second or 0))
 
 
 def _akshare_time_label(raw_updated_at: str, raw_time: str) -> str:

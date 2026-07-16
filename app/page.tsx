@@ -454,9 +454,9 @@ export default function Home() {
     }
   }, []);
 
-  const loadGold = useCallback(async () => {
+  const loadGold = useCallback(async (forceRefresh = false) => {
     const [gold, goldTrades] = await Promise.all([
-      fetchJson<GoldMonitor>("/gold/monitor"),
+      fetchJson<GoldMonitor>(forceRefresh ? "/gold/refresh" : "/gold/monitor", forceRefresh ? { method: "POST" } : undefined),
       fetchJson<GoldManualTrade[]>("/gold/manual-trades")
     ]);
     setData((current) => ({ ...current, gold, goldTrades }));
@@ -475,22 +475,22 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const refreshSeconds = marketSession.isOpen ? 10 : data.gold?.is_trading_session ? data.gold.refresh_seconds : 0;
-    if (!refreshSeconds) return undefined;
+    if (!marketSession.isOpen) return undefined;
+    const refreshSeconds = 10;
     load().catch(() => setNotice("自动刷新失败，正在保留最近一次数据。"));
     const timer = window.setInterval(() => {
       load().catch(() => setNotice("自动刷新失败，正在保留最近一次数据。"));
     }, refreshSeconds * 1000);
     return () => window.clearInterval(timer);
-  }, [data.gold?.is_trading_session, data.gold?.refresh_seconds, load, marketSession.isOpen]);
+  }, [load, marketSession.isOpen]);
 
   useEffect(() => {
-    if (marketSession.isOpen || data.gold?.is_trading_session) return undefined;
+    const refreshSeconds = data.gold?.refresh_seconds || 3600;
     const timer = window.setInterval(() => {
       loadGold().catch(() => setNotice("黄金盯盘刷新失败，正在保留最近一次数据。"));
-    }, (data.gold?.refresh_seconds || 60) * 1000);
+    }, refreshSeconds * 1000);
     return () => window.clearInterval(timer);
-  }, [data.gold?.is_trading_session, data.gold?.refresh_seconds, loadGold, marketSession.isOpen]);
+  }, [data.gold?.refresh_seconds, loadGold]);
 
   useEffect(() => {
     runBacktest().catch(() => undefined);
@@ -1135,7 +1135,7 @@ function GoldWatch({
 }: {
   monitor: GoldMonitor;
   trades: GoldManualTrade[];
-  loadGold: () => Promise<void>;
+  loadGold: (forceRefresh?: boolean) => Promise<void>;
   setNotice: (notice: string) => void;
 }) {
   const [tradeForm, setTradeForm] = useState({
@@ -1230,7 +1230,7 @@ function GoldWatch({
           </div>
           <div className="button-row">
             <span className="badge">{monitor.risk_level}</span>
-            <button onClick={loadGold}>刷新黄金数据</button>
+            <button onClick={() => loadGold(true)}>刷新黄金数据</button>
           </div>
         </div>
         <div className="gold-layout">
@@ -1258,7 +1258,7 @@ function GoldWatch({
         <div className="panel-head">
           <div>
             <h2>实时走势线</h2>
-            <p>{monitor.reference_name} 分钟级走势；交易时段每 {monitor.refresh_seconds} 秒刷新一次，行情时间 {monitor.quote_time}。</p>
+            <p>{monitor.reference_name} 分钟级走势；自动每 {Math.round(monitor.refresh_seconds / 60)} 分钟补拉一次，手动刷新会立即更新黄金页面数据，行情时间 {monitor.quote_time}。</p>
           </div>
           <span className="badge">{monitor.is_trading_session ? "交易时段" : "非交易时段"}</span>
         </div>
