@@ -7,11 +7,14 @@
 | 项目 | 路径 | 服务器目录 | 数据目录 | 数据库 | API |
 | --- | --- | --- | --- | --- | --- |
 | 美股驾驶舱 | `/usstock` | `/root/apps/us-stock-cockpit` | `/root/apps/us-stock-cockpit/data/usstock` | `usstock_cockpit.db` | `/usstock/api/*` |
+| A股驾驶舱 | `/cnstock` | `/root/apps/cnstock` | `/root/apps/cnstock/data/cnstock` | `cnstock_cockpit.db` | `/cnstock/api/*` |
 
 当前公开入口：
 
 - 美股前端：`https://brianhub.net/usstock`
 - 美股 API：`https://brianhub.net/usstock/api/*`
+- A股前端：`https://brianhub.net/cnstock`
+- A股 API：`https://brianhub.net/cnstock/api/*`
 - 根路径：`https://brianhub.net/` 自动跳转到 `/usstock`
 
 当前代码来源：

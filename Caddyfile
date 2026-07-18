@@ -15,4 +15,13 @@
 	route /usstock* {
 		reverse_proxy usstock_frontend:3000
 	}
+
+	route /cnstock/api/* {
+		uri strip_prefix /cnstock/api
+		reverse_proxy cnstock_backend:8000
+	}
+
+	route /cnstock* {
+		reverse_proxy cnstock_frontend:3000
+	}
 }
