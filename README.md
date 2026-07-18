@@ -1,17 +1,44 @@
 # 美股驾驶舱
 
-本项目实现一个本地可运行的自动化美股策略交易实验平台，形态参考小红书截图里的深色驾驶舱，但使用自有名称和代码结构。
+本项目实现一个可本地运行、也已部署到 `brianhub.net/usstock` 的美股策略与持仓纪律驾驶舱。系统用于记录真实持仓、线下成交、股票池、行情缓存、模型评分、配舱建议和黄金盯盘；当前保持人工确认交易，不做自动实盘下单。
+
+线上入口：
+
+- 美股驾驶舱：`https://brianhub.net/usstock`
+- API 前缀：`https://brianhub.net/usstock/api`
+- 根域名：`https://brianhub.net/` 自动跳转到 `/usstock`
+
+生产访问受 `APP_PASSWORD` 保护。后端业务接口未带密码会返回 `401`；前端会在当前浏览器保存一次输入的密码，顶部“锁定”按钮可清除本机授权。
 
 ## 已实现
 
-- Next.js 前台：驾驶舱、策略模型、MAG7 股票池、持仓纪律、模型分析。
-- FastAPI 后台：计划里的 REST API、样例数据、PE/PEG/ROI 因子策略、回测结果、风控状态。
+- Next.js 前台：驾驶舱、策略模型、股票池、黄金盯盘、持仓纪律、模型分析。
+- FastAPI 后台：REST API、真实/缓存行情、PE/PEG/ROI 因子策略、回测结果、风控状态。
+- SQLite 本地/云端持久化：持仓、订单、账户余额、股票池、黄金成交、行情缓存、纪律事件。
 - 风控引擎：单票 5%、总仓 50%、日亏 2%、周亏 6%、暂停自动执行。
 - 券商适配层：`PaperBrokerAdapter`、`USmartBrokerAdapter` 和 `IBKRBrokerAdapter`。
 - 实盘保护：任何 live 模式必须显式设置 `ENABLE_LIVE_TRADING=true`，订单仍会先经过风控。
 - uSMART 请求预演：`POST /orders/preview` 会生成官方字段、请求头、签名状态和阻断原因。
-- ZA Bank 手工执行记录：`POST /manual-executions` 用于把 ZA App 内确认的成交写回纪律日志。
-- 当前主路径：AKShare 实时/准实时行情、TuShare 基本面、ZA/uSMART 结单或截图导入对账。
+- ZA Bank/uSMART 手工执行记录：`POST /manual-executions` 用于把 App 内确认的成交写回纪律日志和持仓。
+- 股票池配舱建议：结合当前行情、持仓、账户现金、现金垫比例和模型评分生成买入/卖出参考价。
+- 当前主路径：FMP 行情、真实历史/缓存数据、ZA/uSMART 结单或截图导入对账；不使用模拟数据补齐生产判断。
+
+## 项目结构
+
+```text
+app/                  # Next.js 前端
+backend/app/          # FastAPI 后端、策略、风控、数据源、存储
+backend/tests/        # 后端测试
+scripts/              # 数据迁移、备份、生产部署脚本
+docs/                 # 部署、交接、多项目接入说明
+data/usstock/         # 本地数据目录，生产数据不提交 Git
+```
+
+关键文档：
+
+- `docs/AI_RESUME_CONTEXT.md`：给新 AI 会话快速接手项目。
+- `docs/DEPLOYMENT.md`：美股项目生产部署说明。
+- `docs/BRIANHUB_MULTI_PROJECT_GUIDE.md`：`brianhub.net` 多项目部署边界和接入方式。
 
 ## 本地启动
 
@@ -33,6 +60,55 @@ npm run dev
 
 后台 API：`http://127.0.0.1:8000/docs`
 
+本地开发默认可以不设置 `APP_PASSWORD`。如果要模拟生产鉴权，可以设置：
+
+```bash
+APP_PASSWORD=本地测试密码 uvicorn backend.app.main:app --reload --port 8000
+```
+
+带密码请求示例：
+
+```bash
+curl -H 'x-app-password: 本地测试密码' http://127.0.0.1:8000/portfolio/holdings
+```
+
+## 生产部署
+
+当前生产部署在 VPS：
+
+- 域名：`brianhub.net`
+- 项目路径：`/usstock`
+- 服务器目录：`/root/apps/us-stock-cockpit`
+- GitHub 仓库：`https://github.com/maoqiu5/us-stock-cockpit.git`
+- 生产分支：`main`
+
+发布流程：
+
+```bash
+git add 需要提交的文件
+git commit -m "本次修改说明"
+git push origin main
+```
+
+然后登录服务器执行：
+
+```bash
+cd /root/apps/us-stock-cockpit
+scripts/deploy_prod.sh
+```
+
+发布后验证：
+
+```bash
+curl -s https://brianhub.net/usstock/api/health
+curl -s -o /dev/null -w '%{http_code}\n' https://brianhub.net/usstock/api/portfolio/holdings
+curl -s -o /dev/null -w '%{http_code}\n' -H 'x-app-password: 访问密码' https://brianhub.net/usstock/api/portfolio/holdings
+```
+
+预期：健康检查返回 `{"status":"ok"}`，未带密码业务接口返回 `401`，带密码返回 `200`。
+
+详细部署和后续新项目接入边界见 `docs/DEPLOYMENT.md` 与 `docs/BRIANHUB_MULTI_PROJECT_GUIDE.md`。
+
 ## 实盘接入方式
 
 第一阶段按你的现有账户优先级设计：
@@ -43,11 +119,11 @@ npm run dev
 
 ## 当前现实路径
 
-uSMART Open API 需要公司或渠道资质后，本项目主线调整为：
+uSMART Open API 需要公司或渠道资质后，本项目当前主线为：
 
 ```text
-AKShare 美股报价
-  + TuShare 基本面/历史
+FMP 行情和基础财务数据
+  + 真实历史/缓存数据
   + ZA/uSMART 结单、截图、CSV、手工记录导入
   → 本地策略、风控、持仓、成交、PnL 和纪律复盘
 ```
@@ -62,6 +138,7 @@ curl -X POST http://127.0.0.1:8000/market/import-previous-close
 ```
 
 `/market/import-previous-close` 用于美股未开盘时导入上一交易日收盘价。接口会优先读取 Yahoo 最近日线；如果公开接口不可用，会回退到内置昨收快照，随后重估本地持仓、市值和持仓盈亏。
+生产判断要求优先使用真实数据；缺少真实历史或行情时宁愿显示为空或数据质量不足，不用模拟数据补齐。
 
 导入 uSMART 持仓截图：
 
@@ -166,4 +243,10 @@ ENABLE_LIVE_TRADING=true
 ```bash
 pytest backend/tests
 npm run build
+```
+
+如果本机 `pnpm/npm` 因网络或依赖状态检查失败，可以至少运行 TypeScript 检查：
+
+```bash
+PATH=/Users/brian/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH ./node_modules/.bin/tsc --noEmit
 ```
