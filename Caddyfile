@@ -16,7 +16,8 @@
 		reverse_proxy usstock_frontend:3000
 	}
 
-	handle_path /maildesk/api/* {
+	route /maildesk/api/* {
+		uri strip_prefix /maildesk/api
 		reverse_proxy maildesk_backend:8000
 	}
 
@@ -29,7 +30,7 @@
 		reverse_proxy 172.19.0.1:6080
 	}
 
-	handle /maildesk* {
+	route /maildesk* {
 		reverse_proxy maildesk_frontend:3000
 	}
 

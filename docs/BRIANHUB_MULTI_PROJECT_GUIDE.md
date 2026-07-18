@@ -7,15 +7,15 @@
 | 项目 | 路径 | 服务器目录 | 数据目录 | 数据库 | API |
 | --- | --- | --- | --- | --- | --- |
 | 美股驾驶舱 | `/usstock` | `/root/apps/us-stock-cockpit` | `/root/apps/us-stock-cockpit/data/usstock` | `usstock_cockpit.db` | `/usstock/api/*` |
-| A股驾驶舱 | `/cnstock` | `/root/apps/cnstock` | `/root/apps/cnstock/data/cnstock` | `cnstock_cockpit.db` | `/cnstock/api/*` |
+| cnstock 驾驶舱 | `/cnstock` | `/root/apps/cnstock` | `/root/apps/cnstock/data/cnstock` | `cnstock_cockpit.db` | `/cnstock/api/*` |
 | 每日邮件 Maildesk | `/maildesk` | `/root/apps/maildesk` | `/root/apps/maildesk/data/maildesk` | `maildesk.db` | `/maildesk/api/*` |
 
 当前公开入口：
 
 - 美股前端：`https://brianhub.net/usstock`
 - 美股 API：`https://brianhub.net/usstock/api/*`
-- A股前端：`https://brianhub.net/cnstock`
-- A股 API：`https://brianhub.net/cnstock/api/*`
+- cnstock 前端：`https://brianhub.net/cnstock`
+- cnstock API：`https://brianhub.net/cnstock/api/*`
 - Maildesk 前端：`https://brianhub.net/maildesk`
 - Maildesk API：`https://brianhub.net/maildesk/api/*`
 - 根路径：`https://brianhub.net/` 自动跳转到 `/usstock`
@@ -29,14 +29,59 @@
 - 该 Caddyfile 必须同时包含 `/usstock`、`/cnstock`、`/maildesk` 三个项目路由。
 - 后续更新任一项目业务代码时，不需要改 Caddy；只有新增项目、改路径、改反代目标时才改 Caddy。
 - 禁止在服务器临时手改 Caddyfile 后不回写 Git，否则下一次 usstock 部署会覆盖路由。
+- 每个业务项目只负责自己的 backend/frontend 容器，不允许单独启动 Caddy/Nginx 监听 `80/443`。
+- `usstock`、`cnstock`、`maildesk` 都必须接入同一个 Docker 外部网络：`brianhub_edge`。
+
+当前 Caddyfile 必须保留以下基础路由：
+
+```caddyfile
+route /usstock/api/* {
+    uri strip_prefix /usstock/api
+    reverse_proxy usstock_backend:8000
+}
+
+route /usstock* {
+    reverse_proxy usstock_frontend:3000
+}
+
+route /cnstock/api/* {
+    uri strip_prefix /cnstock/api
+    reverse_proxy cnstock_backend:8000
+}
+
+route /cnstock* {
+    reverse_proxy cnstock_frontend:3000
+}
+
+route /maildesk/api/* {
+    uri strip_prefix /maildesk/api
+    reverse_proxy maildesk_backend:8000
+}
+
+route /maildesk* {
+    reverse_proxy maildesk_frontend:3000
+}
+```
+
+`maildesk` 如果保留浏览器/VNC 入口，相关特殊路由必须放在 `/maildesk*` catchall 前面，避免被前端路由吞掉。
+
+日常部署边界：
+
+- 更新 `usstock` 业务代码：只部署 `usstock_backend` / `usstock_frontend`，不要改 Caddy。
+- 更新 `cnstock` 业务代码：只部署 `cnstock_backend` / `cnstock_frontend`，不要改 Caddy。
+- 更新 `maildesk` 业务代码：只部署 `maildesk_backend` / `maildesk_frontend`，不要改 Caddy。
+- 只有新增项目、修改访问路径、修改反代目标、修改 TLS/基础认证时，才修改 `Caddyfile`。
+- 修改 `Caddyfile` 前先确认 `/usstock`、`/cnstock`、`/maildesk` 三组路由都仍然保留。
 
 长期推荐方案：
 
-- 新建独立基础设施仓库 `brianhub-gateway`。
-- 服务器目录迁移为 `/root/apps/brianhub-gateway`。
-- Caddy 只由 gateway Compose 管理，业务项目不再包含 Caddy。
-- 三个业务项目只启动自己的 backend/frontend，并加入共享网络 `brianhub_edge`。
-- 之后新增/修改路由只提交 gateway 仓库，不再碰 usstock/cnstock/maildesk 业务仓库。
+- 新建独立基础设施仓库：`maoqiu5/brianhub-gateway`。
+- 新建服务器目录：`/root/apps/brianhub-gateway`。
+- `brianhub-gateway` 只管理 Caddy、TLS、路由和统一入口。
+- `usstock` 只管理 `usstock_backend` / `usstock_frontend`。
+- `cnstock` 只管理 `cnstock_backend` / `cnstock_frontend`。
+- `maildesk` 只管理 `maildesk_backend` / `maildesk_frontend`。
+- 迁移完成前，不要擅自删除 usstock 项目里的 Caddy 服务。
 
 当前代码来源：
 
