@@ -440,31 +440,44 @@ function defaultExecutionTime() {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
 }
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+async function fetchJson<T>(path: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
   const appPassword = typeof window === "undefined" ? "" : window.localStorage.getItem(APP_PASSWORD_STORAGE_KEY) || "";
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(appPassword ? { "X-App-Password": appPassword } : {}),
-      ...(init?.headers || {})
-    },
-    cache: "no-store"
-  });
-  if (!response.ok) {
-    let message = `${path} ${response.status}`;
-    try {
-      const body = await response.json();
-      message = body.detail || message;
-    } catch {
-      // Keep the HTTP fallback when the backend did not return JSON.
+  const controller = timeoutMs ? new AbortController() : null;
+  const timeout = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      signal: controller?.signal || init?.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...(appPassword ? { "X-App-Password": appPassword } : {}),
+        ...(init?.headers || {})
+      },
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      let message = `${path} ${response.status}`;
+      try {
+        const body = await response.json();
+        message = body.detail || message;
+      } catch {
+        // Keep the HTTP fallback when the backend did not return JSON.
+      }
+      if (response.status === 401) {
+        message = "需要访问密码";
+      }
+      throw new Error(message);
     }
-    if (response.status === 401) {
-      message = "需要访问密码";
+    return response.json();
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(`${path} 请求超时`);
     }
-    throw new Error(message);
+    throw error;
+  } finally {
+    if (timeout) window.clearTimeout(timeout);
   }
-  return response.json();
 }
 
 export default function Home() {
@@ -503,12 +516,13 @@ export default function Home() {
   const [passwordInput, setPasswordInput] = useState("");
   const [marketSession, setMarketSession] = useState(() => getUSMarketSession());
   const loadingRef = useRef(false);
+  const goldLoadingRef = useRef(false);
 
   const load = useCallback(async () => {
     if (loadingRef.current) return;
     loadingRef.current = true;
     try {
-      const [summary, strategies, events, orders, risk, brokers, execution, sources, holdings, accountBalances, allocation, gold, goldTrades] = await Promise.all([
+      const [summary, strategies, events, orders, risk, brokers, execution, sources, holdings, accountBalances, allocation] = await Promise.all([
         fetchJson<DashboardSummary>("/dashboard/summary"),
         fetchJson<StrategyModel[]>("/strategies"),
         fetchJson<DisciplineEvent[]>("/discipline/events"),
@@ -519,11 +533,9 @@ export default function Home() {
         fetchJson<DataSourceStatus[]>("/data-sources/status"),
         fetchJson<Holding[]>("/portfolio/holdings"),
         fetchJson<AccountBalance[]>("/portfolio/account-balances"),
-        fetchJson<PortfolioOptimization>("/portfolio/optimization"),
-        fetchJson<GoldMonitor>("/gold/monitor"),
-        fetchJson<GoldManualTrade[]>("/gold/manual-trades")
+        fetchJson<PortfolioOptimization>("/portfolio/optimization")
       ]);
-      setData((current) => ({ ...current, summary, strategies, events, orders, risk, brokers, execution, sources, holdings, accountBalances, allocation, gold, goldTrades }));
+      setData((current) => ({ ...current, summary, strategies, events, orders, risk, brokers, execution, sources, holdings, accountBalances, allocation }));
       setLoading(false);
       fetchJson<WatchlistItem[]>("/watchlist")
         .then((watchlist) => setData((current) => ({ ...current, watchlist })))
@@ -537,17 +549,35 @@ export default function Home() {
       fetchJson<CandidateStock[]>("/screening/candidates")
         .then((candidates) => setData((current) => ({ ...current, candidates })))
         .catch(() => setNotice("候选股真实筛选较慢，已先显示持仓和股票池数据。"));
+      if (!goldLoadingRef.current) {
+        goldLoadingRef.current = true;
+        Promise.all([
+          fetchJson<GoldMonitor>("/gold/monitor", undefined, 8000),
+          fetchJson<GoldManualTrade[]>("/gold/manual-trades", undefined, 8000)
+        ])
+          .then(([gold, goldTrades]) => setData((current) => ({ ...current, gold, goldTrades })))
+          .catch(() => setNotice("黄金盯盘接口较慢，已先显示美股账户和股票池数据。"))
+          .finally(() => {
+            goldLoadingRef.current = false;
+          });
+      }
     } finally {
       loadingRef.current = false;
     }
   }, []);
 
   const loadGold = useCallback(async () => {
-    const [gold, goldTrades] = await Promise.all([
-      fetchJson<GoldMonitor>("/gold/monitor"),
-      fetchJson<GoldManualTrade[]>("/gold/manual-trades")
-    ]);
-    setData((current) => ({ ...current, gold, goldTrades }));
+    if (goldLoadingRef.current) return;
+    goldLoadingRef.current = true;
+    try {
+      const [gold, goldTrades] = await Promise.all([
+        fetchJson<GoldMonitor>("/gold/monitor", undefined, 8000),
+        fetchJson<GoldManualTrade[]>("/gold/manual-trades", undefined, 8000)
+      ]);
+      setData((current) => ({ ...current, gold, goldTrades }));
+    } finally {
+      goldLoadingRef.current = false;
+    }
   }, []);
 
   useEffect(() => {
