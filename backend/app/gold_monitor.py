@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -23,6 +25,7 @@ SCREENSHOT_REFERENCE = 878.17
 MIN_PURCHASE_AMOUNT = 900.0
 INCREMENT_AMOUNT = 1.0
 BUY_FEE_RATE = 0.0
+GOLD_QUOTE_CACHE_PATH = Path(os.environ.get("GOLD_QUOTE_CACHE_PATH", "data/usstock/market_cache/gold_quote.json"))
 
 
 def gold_monitor_snapshot(manual_trades: list[GoldManualTrade] | None = None) -> GoldMonitor:
@@ -86,11 +89,22 @@ def gold_monitor_snapshot(manual_trades: list[GoldManualTrade] | None = None) ->
 
 def _minsheng_accumulated_gold_quote() -> dict:
     # 民生/浙商/工银积存金暂无个人开放 API；先用建行主动积存公开分时价作为银行积存金实盘参考锚。
+    is_trading_session = _is_bank_gold_trading_session()
+    if not is_trading_session:
+        cached_quote = _load_cached_gold_quote()
+        if cached_quote:
+            return _quote_with_session_status(cached_quote, is_trading_session, "休市，显示最后报价")
+
     for quote_loader in (_ccb_accumulated_gold_quote, _akshare_sge_gold_quote, _sina_sge_gold_quote):
         try:
-            return quote_loader()
+            quote = _quote_with_session_status(quote_loader(), is_trading_session)
+            _save_cached_gold_quote(quote)
+            return quote
         except Exception:
             continue
+    cached_quote = _load_cached_gold_quote()
+    if cached_quote:
+        return _quote_with_session_status(cached_quote, is_trading_session, "接口暂不可用，显示最后报价")
     return {
         "price": SCREENSHOT_PRICE,
         "change": SCREENSHOT_CHANGE,
@@ -100,10 +114,10 @@ def _minsheng_accumulated_gold_quote() -> dict:
         "reference_price": SCREENSHOT_REFERENCE,
         "symbol": "CMBC_BANK_GOLD",
         "reference_name": "民生银行黄金截图基准",
-        "status": "交易中",
+        "status": "交易中" if is_trading_session else "休市，暂无缓存，显示截图基准",
         "time": _now_label(),
         "trend_points": [],
-        "source": "民生银行截图基准 / 实时接口预留",
+        "source": "民生银行截图基准 / 尚未形成真实报价缓存",
     }
 
 
@@ -123,7 +137,7 @@ def _ccb_accumulated_gold_quote() -> dict:
             "User-Agent": "Mozilla/5.0",
             "X-Requested-With": "XMLHttpRequest",
         },
-        timeout=12,
+        timeout=5,
         trust_env=False,
     )
     response.raise_for_status()
@@ -219,6 +233,48 @@ def _sina_sge_gold_quote() -> dict:
     }
 
 
+def _load_cached_gold_quote() -> dict | None:
+    try:
+        if not GOLD_QUOTE_CACHE_PATH.exists():
+            return None
+        payload = json.loads(GOLD_QUOTE_CACHE_PATH.read_text(encoding="utf-8"))
+        if not payload.get("price") or not payload.get("time"):
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def _save_cached_gold_quote(quote: dict) -> None:
+    try:
+        GOLD_QUOTE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            **quote,
+            "cached_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds"),
+        }
+        GOLD_QUOTE_CACHE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        return
+
+
+def _quote_with_session_status(quote: dict, is_trading_session: bool, detail: str | None = None) -> dict:
+    result = dict(quote)
+    if is_trading_session:
+        result["status"] = "交易中"
+        return result
+
+    cached_at = result.get("cached_at", "")
+    detail_text = detail or "休市，显示最后报价"
+    result["status"] = detail_text
+    source_suffix = f" · {detail_text}"
+    if cached_at:
+        source_suffix += f" · 缓存 {cached_at}"
+    source = str(result.get("source", "黄金报价缓存"))
+    if detail_text not in source:
+        result["source"] = f"{source}{source_suffix}"
+    return result
+
+
 def _trend_points_from_ccb_rows(rows: list[dict]) -> list[dict[str, float | str]]:
     points: list[dict[str, float | str]] = []
     last_index = len(rows) - 1
@@ -280,10 +336,15 @@ def _ccb_point_time_label(raw_time: str) -> str:
 
 def _is_bank_gold_trading_session(now: datetime | None = None) -> bool:
     current = (now or datetime.now()).astimezone(ZoneInfo("Asia/Shanghai"))
-    if current.weekday() >= 5:
-        return False
+    weekday = current.weekday()
     minutes = current.hour * 60 + current.minute
-    return minutes >= 9 * 60 or minutes < 2 * 60 + 30
+    if weekday == 6:
+        return False
+    if weekday == 0:
+        return minutes >= 9 * 60 + 10
+    if weekday == 5:
+        return minutes < 2 * 60 + 30
+    return True
 
 
 def _gold_position_summary(trades: list[GoldManualTrade], live_price: float) -> dict[str, float]:

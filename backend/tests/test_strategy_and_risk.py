@@ -2,6 +2,7 @@ from backend.app.models import OrderRequest, Side
 import backend.app.main as main_module
 from backend.app.broker import USmartBrokerAdapter
 import backend.app.data_sources as data_sources_module
+import backend.app.gold_monitor as gold_monitor_module
 from backend.app.data_sources import market_quotes
 from backend.app.gold_monitor import gold_monitor_snapshot
 from backend.app.main import import_broker_records
@@ -129,7 +130,25 @@ def test_market_quotes_use_previous_close_when_market_closed(monkeypatch):
     assert quotes[0].source == "Yahoo previous close"
 
 
-def test_gold_monitor_tracks_minsheng_accumulated_gold_plan():
+def test_gold_monitor_tracks_minsheng_accumulated_gold_plan(monkeypatch):
+    monkeypatch.setattr(
+        gold_monitor_module,
+        "_minsheng_accumulated_gold_quote",
+        lambda: {
+            "price": 878.2,
+            "change": -5.75,
+            "pct_change": -0.65,
+            "day_high": 881.74,
+            "day_low": 876.38,
+            "reference_price": 878.17,
+            "symbol": "CCB_999933",
+            "reference_name": "建设银行主动积存价 / 银行积存金真实分时参考",
+            "status": "交易中",
+            "time": "07/16 18:31:00",
+            "trend_points": [{"time": f"18:{minute:02d}", "price": 878.2 + minute / 100} for minute in range(20)],
+            "source": "test quote",
+        },
+    )
     snapshot = gold_monitor_snapshot()
     assert snapshot.product_name == "民生积存金"
     assert snapshot.planned_capital == 10000
@@ -140,6 +159,36 @@ def test_gold_monitor_tracks_minsheng_accumulated_gold_plan():
     assert len(snapshot.trend_points) >= 20
     assert snapshot.reference_symbol in {"CCB_999933", "SGE_AU9999", "CMBC_BANK_GOLD"}
     assert snapshot.watch_points
+
+
+def test_gold_monitor_uses_last_cache_when_bank_gold_is_closed(monkeypatch, tmp_path):
+    cache_path = tmp_path / "gold_quote.json"
+    monkeypatch.setattr(gold_monitor_module, "GOLD_QUOTE_CACHE_PATH", cache_path)
+    cached_quote = {
+        "price": 879.5,
+        "change": 1.3,
+        "pct_change": 0.15,
+        "day_high": 881.0,
+        "day_low": 876.0,
+        "reference_price": 878.2,
+        "symbol": "CCB_999933",
+        "reference_name": "建设银行主动积存价 / 银行积存金真实分时参考",
+        "status": "交易中",
+        "time": "07/17 23:59:00",
+        "trend_points": [{"time": "23:59", "price": 879.5}],
+        "source": "test cached ccb quote",
+        "cached_at": "2026-07-17T23:59:00+08:00",
+    }
+    cache_path.write_text(gold_monitor_module.json.dumps(cached_quote, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(gold_monitor_module, "_is_bank_gold_trading_session", lambda now=None: False)
+
+    snapshot = gold_monitor_snapshot()
+
+    assert snapshot.live_price == 879.5
+    assert not snapshot.is_trading_session
+    assert "休市" in snapshot.trading_status
+    assert "最后报价" in snapshot.trading_status
+    assert "缓存" in snapshot.source
 
 
 def test_gold_manual_trade_records_real_offline_execution():
