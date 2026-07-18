@@ -14,6 +14,21 @@
 - 美股 API：`https://brianhub.net/usstock/api/*`
 - 根路径：`https://brianhub.net/` 自动跳转到 `/usstock`
 
+当前代码来源：
+
+- GitHub 仓库：`https://github.com/maoqiu5/us-stock-cockpit.git`
+- 生产分支：`main`
+- 本机项目目录：`/Users/brian/Documents/美股`
+- 服务器项目目录：`/root/apps/us-stock-cockpit`
+- 服务器 Git remote：`git@github.com-usstock:maoqiu5/us-stock-cockpit.git`
+- 服务器通过 GitHub deploy key 拉取代码；deploy key 放在服务器 `/root/.ssh/us_stock_cockpit_deploy`，不要复制到项目仓库。
+
+当前生产访问密码：
+
+- 访问密码只存服务器 `.env.production` 和 `.app_password`，不要写入 Git。
+- 前端会把用户输入的密码保存在当前浏览器 `localStorage`，所以同一台电脑上再次打开可能不再弹登录。
+- 页面顶部有“锁定”按钮，点击后会清除当前浏览器保存的密码，下次进入必须重新输入。
+
 ## 路径命名规则
 
 每个项目必须先确定一个短 slug：
@@ -153,6 +168,74 @@ route /demoapp* {
 
 重要：当前 Caddy 运行在美股项目 Compose 内，已经占用服务器 `80/443`。后续新项目不要再启动自己的 Caddy 监听 `80/443`，否则端口会冲突。新项目只启动自己的 frontend/backend，并接入 `brianhub_edge` 网络，再让现有 Caddy 转发。
 
+## GitHub 发布流程
+
+当前已经跑通的短期发布方式是：本机提交到 GitHub，服务器手动拉取并重建容器。
+
+本机修改后：
+
+```bash
+cd /Users/brian/Documents/美股
+git status
+git add 需要提交的文件
+git commit -m "本次修改说明"
+git push origin main
+```
+
+服务器发布：
+
+```bash
+ssh root@192.236.235.229
+cd /root/apps/us-stock-cockpit
+scripts/deploy_prod.sh
+```
+
+`scripts/deploy_prod.sh` 会执行：
+
+- 拉取 GitHub `main` 最新代码。
+- 构建 backend/frontend Docker 镜像。
+- 重建美股项目容器。
+- 保留服务器 `data/usstock/` 下的生产数据。
+
+注意：
+
+- 不要在服务器直接改业务代码，避免和 GitHub 版本分叉。
+- 不要提交 `.env.production`、`.app_password`、`data/`、API key、服务器密码。
+- 如果只改了文档，也建议走 GitHub 提交流程，让新的 AI 会话能从仓库读到最新说明。
+- 后续可以升级成 GitHub Actions 或 webhook 自动部署，但当前稳定做法仍是手动 SSH 执行部署脚本。
+
+## 发布后验证
+
+每次发布美股项目后，至少检查以下几项：
+
+```bash
+curl -I https://brianhub.net/usstock
+curl -I https://brianhub.net/
+curl -s https://brianhub.net/usstock/api/health
+curl -s -o /dev/null -w '%{http_code}\n' https://brianhub.net/usstock/api/portfolio/holdings
+curl -s -o /dev/null -w '%{http_code}\n' -H 'x-app-password: 访问密码' https://brianhub.net/usstock/api/portfolio/holdings
+```
+
+预期：
+
+- `/usstock` 返回 `200`。
+- `/` 返回 `302` 并跳转到 `/usstock`。
+- `/usstock/api/health` 返回 `{"status":"ok"}`。
+- 未带密码的业务接口返回 `401`。
+- 带密码的业务接口返回 `200`。
+
+如果需要确认前端是否已经切到新构建，可以先抓取页面里的 Next.js 页面资源：
+
+```bash
+curl -sL https://brianhub.net/usstock | rg -o '/usstock/_next/static/chunks/app/page-[^" ]+\.js'
+```
+
+再检查该 JS 里是否包含本次改动的关键文本，例如“锁定”：
+
+```bash
+curl -sL https://brianhub.net/usstock/_next/static/chunks/app/page-文件名.js | rg '锁定|已锁定|us-stock-cockpit-password'
+```
+
 ## 服务器边界
 
 服务器项目目录建议：
@@ -216,6 +299,13 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'x-app-password: 密码' https://bri
 ```
 
 预期：无密码业务接口返回 `401`，带密码返回 `200`。
+
+如果前端打开后仍像旧版：
+
+- 先确认 `scripts/deploy_prod.sh` 是否完整跑完。
+- 再确认页面 HTML 中的 `page-*.js` 文件名是否变化。
+- 浏览器可能缓存了旧资源时，强制刷新或用无痕窗口访问。
+- 如果同一浏览器已经登录过，可能因为 `localStorage` 保存了密码而直接进入；点页面顶部“锁定”可清除本机授权。
 
 ## 不要做的事
 
