@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .app_password
+LOCAL_SECRETS.md
 .venv/
 node_modules/
 .next/
