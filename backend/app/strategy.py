@@ -58,10 +58,7 @@ def generate_signal(item: WatchlistItem, strategy_id: str = "pe_v1") -> Signal:
 
 
 def run_backtest(strategy_id: str, ticker: str, start_date: str = "2026-05-01", end_date: str = "2026-07-16") -> BacktestResult:
-    try:
-        return _run_historical_backtest(strategy_id, ticker, start_date, end_date)
-    except Exception:
-        return _run_fallback_backtest(strategy_id, ticker)
+    return _run_historical_backtest(strategy_id, ticker, start_date, end_date)
 
 
 def _run_historical_backtest(strategy_id: str, ticker: str, start_date: str, end_date: str) -> BacktestResult:
@@ -88,45 +85,6 @@ def _run_historical_backtest(strategy_id: str, ticker: str, start_date: str, end
         max_drawdown=round(_max_drawdown(equity_curve), 2),
         trades=_count_trades(strategy_returns),
         benchmark_return=round(benchmark_return, 2),
-        records=records,
-    )
-
-
-def _run_fallback_backtest(strategy_id: str, ticker: str) -> BacktestResult:
-    seed = sum(ord(ch) for ch in f"{strategy_id}:{ticker}")
-    base_return = 18 + (seed % 17)
-    if strategy_id == "pe_v1" and ticker == "NOK.US":
-        base_return = -29.83
-    pnl = 12000 + (seed % 7000) * 4.9
-    if ticker == "NOK.US":
-        pnl = -472.72
-    if ticker == "SMR.US":
-        pnl = -869.6
-
-    records: list[BacktestPoint] = []
-    equity = 100000.0
-    benchmark = 100000.0
-    for index in range(7):
-        equity *= 1 + (base_return / 100 / 7) - (0.018 if index == 3 else 0) + (0.004 if index % 2 == 0 else -0.002)
-        benchmark *= 1 + (15.2 / 100 / 7) - (0.008 if index == 3 else 0)
-        records.append(BacktestPoint(date=f"2026-06-{10 + index * 2:02d}", equity=round(equity, 2), benchmark=round(benchmark, 2)))
-
-    deltas = [records[i].equity - records[i - 1].equity for i in range(1, len(records))]
-    wins = [delta for delta in deltas if delta > 0]
-    losses = [abs(delta) for delta in deltas if delta < 0]
-    profit_factor = sum(wins) / max(sum(losses), 1)
-    win_rate = len(wins) / max(len(deltas), 1)
-
-    return BacktestResult(
-        strategy_id=strategy_id,
-        ticker=ticker,
-        annual_return=round(base_return, 2),
-        pnl=round(pnl, 2),
-        win_rate=round(win_rate, 2),
-        profit_factor=round(min(profit_factor, 4.8), 2),
-        max_drawdown=-56.53 if ticker == "SMR.US" else (-30.12 if ticker in {"NOK.US", "NOK"} else -10.94),
-        trades=5 if strategy_id == "pe_v1" else 3,
-        benchmark_return=15.2,
         records=records,
     )
 

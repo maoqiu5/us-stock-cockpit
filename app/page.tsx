@@ -25,6 +25,7 @@ const USMART_SCREENSHOT_PATH =
   "/Users/brian/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_5oxgvzo5wkcv21_448a/temp/RWTemp/2026-07/b3cb3351d259bd6f77573a1d380b26e0.jpg";
 const ZA_SCREENSHOT_PATH =
   "/Users/brian/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_5oxgvzo5wkcv21_448a/temp/RWTemp/2026-07/4ce6a65a5e65b7986b40f0da36549bc8.jpg";
+const APP_PASSWORD_STORAGE_KEY = "us-stock-cockpit-password";
 
 type DashboardSummary = {
   account_total: number;
@@ -97,6 +98,16 @@ type Order = {
   created_at: string;
 };
 
+type OfflineTradeForm = {
+  broker: "za-bank" | "usmart" | "ibkr" | "other";
+  ticker: string;
+  side: "BUY" | "SELL";
+  qty: string;
+  price: string;
+  executed_at: string;
+  note: string;
+};
+
 type RiskStatus = {
   allowed: boolean;
   blocked_reason: string;
@@ -165,6 +176,17 @@ type Holding = {
   pnl: number;
   currency: string;
   updated_at: string;
+};
+
+type AccountBalance = {
+  broker: "za-bank" | "usmart" | "ibkr" | "manual";
+  name: string;
+  available_cash: number;
+  holding_value: number;
+  account_total: number;
+  currency: string;
+  updated_at: string;
+  source: string;
 };
 
 type USmartScreenshotResult = {
@@ -252,23 +274,40 @@ type PreviousCloseImportResult = {
   warnings: string[];
 };
 
-type HoldingAdvice = {
+type TradePlanItem = {
   ticker: string;
+  name: string;
   broker: string;
+  signal: string;
+  model_score: number;
   action: string;
+  side: "BUY" | "SELL" | "NONE";
+  current_weight: number;
+  target_weight: number;
+  current_amount: number;
+  target_amount: number;
+  delta_amount: number;
+  reference_price: number;
+  suggested_qty: number;
+  stop_loss_price: number;
+  take_profit_price: number;
   confidence: number;
   reason: string;
-  risk_level: "low" | "medium" | "high";
-  suggested_weight: number;
+  blockers: string[];
 };
 
 type CandidateStock = {
   ticker: string;
   name: string;
   sector: string;
+  price: number;
   score: number;
   reason: string;
   action: string;
+  model_score: number;
+  data_quality: number;
+  signal: string;
+  reference_source: string;
 };
 
 type AllocationSuggestion = {
@@ -291,9 +330,19 @@ type PortfolioOptimization = {
 type ModelValidationItem = {
   strategy_id: string;
   tested: number;
+  valid_samples: number;
+  missing_samples: number;
+  data_quality: number;
+  data_quality_label: string;
   best_ticker: string;
   average_annual_return: number;
   average_max_drawdown: number;
+  short_return: number;
+  short_drawdown: number;
+  medium_return: number;
+  medium_drawdown: number;
+  long_return: number;
+  long_drawdown: number;
   tuning_note: string;
 };
 
@@ -322,7 +371,8 @@ type AppData = {
   quotes: MarketQuote[];
   sources: DataSourceStatus[];
   holdings: Holding[];
-  holdingAdvice: HoldingAdvice[];
+  accountBalances: AccountBalance[];
+  tradePlan: TradePlanItem[];
   candidates: CandidateStock[];
   allocation: PortfolioOptimization | null;
   gold: GoldMonitor | null;
@@ -340,6 +390,8 @@ const nav = [
 
 const fmtMoney = (value: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+
+const roundMoney = (value: number) => Math.round(value * 100) / 100;
 
 const fmtCny = (value: number) =>
   new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
@@ -377,10 +429,21 @@ function getUSMarketSession(now = new Date()) {
   };
 }
 
+function defaultExecutionTime() {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const appPassword = typeof window === "undefined" ? "" : window.localStorage.getItem(APP_PASSWORD_STORAGE_KEY) || "";
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(appPassword ? { "X-App-Password": appPassword } : {}),
+      ...(init?.headers || {})
+    },
     cache: "no-store"
   });
   if (!response.ok) {
@@ -390,6 +453,9 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
       message = body.detail || message;
     } catch {
       // Keep the HTTP fallback when the backend did not return JSON.
+    }
+    if (response.status === 401) {
+      message = "需要访问密码";
     }
     throw new Error(message);
   }
@@ -410,7 +476,8 @@ export default function Home() {
     quotes: [],
     sources: [],
     holdings: [],
-    holdingAdvice: [],
+    accountBalances: [],
+    tradePlan: [],
     candidates: [],
     allocation: null,
     gold: null,
@@ -427,6 +494,8 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [validatingModels, setValidatingModels] = useState(false);
   const [notice, setNotice] = useState("");
+  const [authRequired, setAuthRequired] = useState(false);
+  const [passwordInput, setPasswordInput] = useState("");
   const [marketSession, setMarketSession] = useState(() => getUSMarketSession());
   const loadingRef = useRef(false);
 
@@ -434,10 +503,9 @@ export default function Home() {
     if (loadingRef.current) return;
     loadingRef.current = true;
     try {
-      const [summary, strategies, watchlist, events, orders, risk, brokers, execution, sources, holdings, holdingAdvice, candidates, allocation, gold, goldTrades] = await Promise.all([
+      const [summary, strategies, events, orders, risk, brokers, execution, sources, holdings, accountBalances, allocation, gold, goldTrades] = await Promise.all([
         fetchJson<DashboardSummary>("/dashboard/summary"),
         fetchJson<StrategyModel[]>("/strategies"),
-        fetchJson<WatchlistItem[]>("/watchlist"),
         fetchJson<DisciplineEvent[]>("/discipline/events"),
         fetchJson<Order[]>("/orders"),
         fetchJson<RiskStatus>("/risk/status"),
@@ -445,17 +513,25 @@ export default function Home() {
         fetchJson<ExecutionConfig>("/execution/config"),
         fetchJson<DataSourceStatus[]>("/data-sources/status"),
         fetchJson<Holding[]>("/portfolio/holdings"),
-        fetchJson<HoldingAdvice[]>("/advice/holdings"),
-        fetchJson<CandidateStock[]>("/screening/candidates"),
+        fetchJson<AccountBalance[]>("/portfolio/account-balances"),
         fetchJson<PortfolioOptimization>("/portfolio/optimization"),
         fetchJson<GoldMonitor>("/gold/monitor"),
         fetchJson<GoldManualTrade[]>("/gold/manual-trades")
       ]);
-      setData((current) => ({ ...current, summary, strategies, watchlist, events, orders, risk, brokers, execution, sources, holdings, holdingAdvice, candidates, allocation, gold, goldTrades }));
+      setData((current) => ({ ...current, summary, strategies, events, orders, risk, brokers, execution, sources, holdings, accountBalances, allocation, gold, goldTrades }));
       setLoading(false);
+      fetchJson<WatchlistItem[]>("/watchlist")
+        .then((watchlist) => setData((current) => ({ ...current, watchlist })))
+        .catch(() => setNotice("股票池实时计算较慢，已先显示账户和持仓数据。"));
+      fetchJson<TradePlanItem[]>("/execution/plan")
+        .then((tradePlan) => setData((current) => ({ ...current, tradePlan })))
+        .catch(() => setNotice("执行计划计算较慢，已先显示账户和持仓数据。"));
       fetchJson<MarketQuote[]>("/market/quotes")
         .then((quotes) => setData((current) => ({ ...current, quotes })))
         .catch(() => setNotice("行情刷新较慢，已先显示账户和策略数据。"));
+      fetchJson<CandidateStock[]>("/screening/candidates")
+        .then((candidates) => setData((current) => ({ ...current, candidates })))
+        .catch(() => setNotice("候选股真实筛选较慢，已先显示持仓和股票池数据。"));
     } finally {
       loadingRef.current = false;
     }
@@ -470,8 +546,13 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    load().catch(() => {
+    load().catch((error) => {
       setLoading(false);
+      if (error instanceof Error && error.message === "需要访问密码") {
+        setAuthRequired(true);
+        setNotice("请输入访问密码。");
+        return;
+      }
       setNotice("后端暂未连接，正在显示前端骨架。");
     });
   }, [load]);
@@ -509,16 +590,22 @@ export default function Home() {
   );
 
   async function runBacktest() {
-    const result = await fetchJson<BacktestResult>(`/strategies/${selectedStrategy}/backtest`, {
-      method: "POST",
-      body: JSON.stringify({
-        ticker: selectedTicker,
-        start_date: "2026-05-01",
-        end_date: "2026-07-16",
-        mode: analysisType
-      })
-    });
-    setBacktest(result);
+    try {
+      const result = await fetchJson<BacktestResult>(`/strategies/${selectedStrategy}/backtest`, {
+        method: "POST",
+        body: JSON.stringify({
+          ticker: selectedTicker,
+          start_date: "2026-05-01",
+          end_date: "2026-07-16",
+          mode: analysisType
+        })
+      });
+      setBacktest(result);
+      setNotice("");
+    } catch (error) {
+      setBacktest(null);
+      setNotice(error instanceof Error ? error.message : "缺少真实历史数据，无法回测。");
+    }
   }
 
   async function toggleAutomation(paused: boolean) {
@@ -544,20 +631,39 @@ export default function Home() {
   }
 
   async function recordZaManualExecution() {
+    await submitOfflineTrade({
+      broker: "za-bank",
+      ticker: selectedTicker,
+      side: "BUY",
+      qty: "1",
+      price: String(defaultPriceForTicker(selectedTicker)),
+      executed_at: defaultExecutionTime(),
+      note: "ZA Bank App 手工确认"
+    });
+  }
+
+  async function submitOfflineTrade(form: OfflineTradeForm) {
+    const ticker = form.ticker.trim().toUpperCase();
+    const qty = Number(form.qty);
+    const price = Number(form.price);
+    if (!ticker || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price) || price <= 0) {
+      setNotice("请填写有效的股票代码、数量和成交价。");
+      return;
+    }
     await fetchJson<Order>("/manual-executions", {
       method: "POST",
       body: JSON.stringify({
-        broker: "za-bank",
-        ticker: selectedTicker,
-        side: "BUY",
-        qty: 1,
-        price: defaultPriceForTicker(selectedTicker),
-        executed_at: "07/16 14:04",
-        note: "ZA Bank App 手工确认"
+        broker: form.broker,
+        ticker,
+        side: form.side,
+        qty,
+        price,
+        executed_at: form.executed_at || defaultExecutionTime(),
+        note: form.note
       })
     });
     await load();
-    setNotice("已记录一笔 ZA Bank 手工成交。");
+    setNotice(`已记录 ${ticker} ${form.side === "BUY" ? "买入" : "卖出"} ${qty} 股线下交易，并更新本地持仓。`);
   }
 
   async function importUsmartScreenshot() {
@@ -636,6 +742,53 @@ export default function Home() {
     } finally {
       setValidatingModels(false);
     }
+  }
+
+  async function unlockApp(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmed = passwordInput.trim();
+    if (!trimmed) {
+      setNotice("请输入访问密码。");
+      return;
+    }
+    window.localStorage.setItem(APP_PASSWORD_STORAGE_KEY, trimmed);
+    setAuthRequired(false);
+    setLoading(true);
+    try {
+      await load();
+      setNotice("");
+    } catch (error) {
+      window.localStorage.removeItem(APP_PASSWORD_STORAGE_KEY);
+      setAuthRequired(true);
+      setLoading(false);
+      setNotice(error instanceof Error ? error.message : "访问密码不正确。");
+    }
+  }
+
+  if (authRequired) {
+    return (
+      <main className="login-shell">
+        <form className="login-panel" onSubmit={unlockApp}>
+          <div>
+            <span className="login-kicker">US STOCK COCKPIT</span>
+            <h1>美股驾驶舱</h1>
+            <p>输入访问密码后查看持仓、股票池和交易纪律。</p>
+          </div>
+          <label>
+            <span>访问密码</span>
+            <input
+              autoFocus
+              type="password"
+              value={passwordInput}
+              onChange={(event) => setPasswordInput(event.target.value)}
+              placeholder="请输入 APP_PASSWORD"
+            />
+          </label>
+          <button className="primary" type="submit">进入驾驶舱</button>
+          {notice && <small className="login-error">{notice}</small>}
+        </form>
+      </main>
+    );
   }
 
   return (
@@ -718,7 +871,8 @@ export default function Home() {
             items={data.watchlist}
             quotes={data.quotes}
             holdings={data.holdings}
-            holdingAdvice={data.holdingAdvice}
+            accountBalances={data.accountBalances}
+            tradePlan={data.tradePlan}
             candidates={data.candidates}
             allocation={data.allocation}
             validation={validation}
@@ -738,7 +892,9 @@ export default function Home() {
             events={data.events}
             orders={data.orders}
             holdings={data.holdings}
+            selectedTicker={selectedTicker}
             recordZaManualExecution={recordZaManualExecution}
+            submitOfflineTrade={submitOfflineTrade}
             importUsmartScreenshot={importUsmartScreenshot}
             importZaScreenshot={importZaScreenshot}
           />
@@ -960,7 +1116,8 @@ function Watchlist({
   items,
   quotes,
   holdings,
-  holdingAdvice,
+  accountBalances,
+  tradePlan,
   candidates,
   allocation,
   validation,
@@ -976,7 +1133,8 @@ function Watchlist({
   items: WatchlistItem[];
   quotes: MarketQuote[];
   holdings: Holding[];
-  holdingAdvice: HoldingAdvice[];
+  accountBalances: AccountBalance[];
+  tradePlan: TradePlanItem[];
   candidates: CandidateStock[];
   allocation: PortfolioOptimization | null;
   validation: ModelValidationItem[];
@@ -991,6 +1149,25 @@ function Watchlist({
 }) {
   const quoteMap = new Map(quotes.map((quote) => [quote.ticker, quote]));
   const accountTotal = holdings.reduce((sum, holding) => sum + holding.market_value, 0);
+  const cashBalance = accountBalances.reduce((sum, account) => sum + account.available_cash, 0);
+  const accountEquity = accountBalances.reduce((sum, account) => sum + account.account_total, 0);
+  const reserveCash = Math.max(accountEquity * 0.08, 0);
+  const deployableCash = Math.max(cashBalance - reserveCash, 0);
+  const buyPlans = tradePlan.filter((item) => item.side === "BUY" && item.suggested_qty > 0 && item.blockers.length === 0);
+  const reducePlans = tradePlan.filter((item) => item.side === "SELL" && item.suggested_qty > 0);
+  const planWeightTotal = buyPlans.reduce((sum, item) => sum + Math.max(item.model_score, 40) * item.confidence, 0) || 1;
+  const mixedBuyPlans = buyPlans.map((item) => {
+    const weight = Math.max(item.model_score, 40) * item.confidence / planWeightTotal;
+    const budget = Math.min(Math.max(deployableCash * weight, 0), Math.abs(item.delta_amount));
+    const qty = Math.floor(budget / Math.max(item.reference_price, 0.01));
+    return { ...item, budget: roundMoney(qty * item.reference_price), qty };
+  }).filter((item) => item.qty > 0);
+  const reduceCash = reducePlans.reduce((sum, item) => sum + Math.abs(item.delta_amount), 0);
+  const todayDeckAction = deployableCash >= 25 && mixedBuyPlans.length
+    ? "可混合加仓"
+    : reducePlans.length
+      ? "先减仓回收弹药"
+      : "观察等待";
   const holdingMap = new Map<string, { qty: number; cost: number; value: number; pnl: number; brokers: Set<string> }>();
   holdings.forEach((holding) => {
     const current = holdingMap.get(holding.ticker) || { qty: 0, cost: 0, value: 0, pnl: 0, brokers: new Set<string>() };
@@ -1016,6 +1193,19 @@ function Watchlist({
               {validatingModels ? "验证中..." : "验证模型"}
             </button>
           </div>
+        </div>
+        <div className="account-balance-grid">
+          {accountBalances.map((account) => (
+            <article key={account.broker} className="account-balance-card">
+              <span>{account.name}</span>
+              <strong>{fmtMoney(account.available_cash)}</strong>
+              <small>可用余额</small>
+              <dl>
+                <div><dt>持仓市值</dt><dd>{fmtMoney(account.holding_value)}</dd></div>
+                <div><dt>账户合计</dt><dd>{fmtMoney(account.account_total)}</dd></div>
+              </dl>
+            </article>
+          ))}
         </div>
         <div className="add-stock-row">
           <label>新增监控股票
@@ -1075,20 +1265,87 @@ function Watchlist({
       <section className="panel wide">
         <div className="panel-head">
           <div>
-            <h2>持仓实时交易建议</h2>
-            <p>根据持仓盈亏、仓位集中度和风控纪律生成，只用于决策提示。</p>
+            <h2>执行策略</h2>
+            <p>把股票池信号、模型分、持仓和现金约束转成目标仓位、金额、股数和价格纪律。</p>
           </div>
-          <span className="badge">{holdingAdvice.length} 条</span>
+          <span className="badge">{tradePlan.filter((item) => item.side !== "NONE").length} 个动作</span>
         </div>
-        <div className="advice-grid">
-          {holdingAdvice.map((item) => (
-            <article key={`${item.broker}-${item.ticker}`} className={`advice-card ${item.risk_level}`}>
-              <strong>{item.ticker}</strong>
-              <b>{item.action}</b>
-              <span>建议权重 {item.suggested_weight.toFixed(2)}% · 置信 {Math.round(item.confidence * 100)}%</span>
+        <div className="execution-plan-grid">
+          {tradePlan.map((item) => (
+            <article key={item.ticker} className={`execution-plan-card ${item.side.toLowerCase()}`}>
+              <header>
+                <strong>{item.ticker}</strong>
+                <b>{item.action}</b>
+                <span>{item.signal} · 模型分 {item.model_score || "-"}</span>
+              </header>
+              <dl>
+                <div><dt>方向</dt><dd>{item.side === "NONE" ? "不下单" : item.side}</dd></div>
+                <div><dt>建议股数</dt><dd>{item.suggested_qty}</dd></div>
+                <div><dt>金额差</dt><dd>{fmtMoney(item.delta_amount)}</dd></div>
+                <div><dt>参考价</dt><dd>{fmtMoney(item.reference_price)}</dd></div>
+                <div><dt>仓位</dt><dd>{item.current_weight.toFixed(2)}% → {item.target_weight.toFixed(2)}%</dd></div>
+                <div><dt>止损/止盈</dt><dd>{fmtMoney(item.stop_loss_price)} / {fmtMoney(item.take_profit_price)}</dd></div>
+              </dl>
               <p>{item.reason}</p>
+              {item.blockers.length > 0 && <span className="blocker">{item.blockers.join("；")}</span>}
             </article>
           ))}
+        </div>
+      </section>
+
+      <section className="panel wide">
+        <div className="panel-head">
+          <div>
+            <h2>今日配舱</h2>
+            <p>按账户现金弹药、现金垫、股票池信号和执行策略生成今日混合加仓与减仓顺序。</p>
+          </div>
+          <span className="badge">{todayDeckAction}</span>
+        </div>
+        <div className="deck-summary">
+          <div><span>总弹药</span><strong>{fmtMoney(cashBalance)}</strong></div>
+          <div><span>现金垫</span><strong>{fmtMoney(reserveCash)}</strong></div>
+          <div><span>可动用</span><strong>{fmtMoney(deployableCash)}</strong></div>
+          <div><span>减仓可回收</span><strong>{fmtMoney(reduceCash)}</strong></div>
+        </div>
+        <div className="deck-plan-grid">
+          <article className="deck-plan-card buy">
+            <header>
+              <strong>混合加仓</strong>
+              <span>{mixedBuyPlans.length ? `${mixedBuyPlans.length} 个标的` : "暂无可执行买入"}</span>
+            </header>
+            {mixedBuyPlans.length ? (
+              <div className="compact-table">
+                {mixedBuyPlans.map((item) => (
+                  <div key={`deck-buy-${item.ticker}`}>
+                    <span>{item.ticker} · 买入参考 {fmtMoney(item.reference_price)} · 止损 {fmtMoney(item.stop_loss_price)} · 止盈 {fmtMoney(item.take_profit_price)}</span>
+                    <b>{item.qty} 股</b>
+                    <em>{fmtMoney(item.budget)}</em>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p>当前没有同时满足现金垫、BUY 信号、无阻断条件的标的。先保留弹药，等待股票池信号转强。</p>
+            )}
+          </article>
+          <article className="deck-plan-card sell">
+            <header>
+              <strong>减仓顺序</strong>
+              <span>{reducePlans.length ? `${reducePlans.length} 个标的` : "暂无强制减仓"}</span>
+            </header>
+            {reducePlans.length ? (
+              <div className="compact-table">
+                {reducePlans.map((item) => (
+                  <div key={`deck-sell-${item.ticker}`}>
+                    <span>{item.ticker} · 卖出参考 {fmtMoney(item.reference_price)} · 止损 {fmtMoney(item.stop_loss_price)} · 止盈 {fmtMoney(item.take_profit_price)}</span>
+                    <b>{item.suggested_qty} 股</b>
+                    <em>{fmtMoney(Math.abs(item.delta_amount))}</em>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p>当前执行计划没有生成减仓动作。若需要补足弹药，优先人工检查高亏损、高集中度或模型分偏低的持仓。</p>
+            )}
+          </article>
         </div>
       </section>
 
@@ -1105,7 +1362,9 @@ function Watchlist({
             <article key={candidate.ticker} className="advice-card">
               <strong>{candidate.ticker} · {candidate.name}</strong>
               <b>{candidate.score}</b>
-              <span>{candidate.sector} · {candidate.action}</span>
+              <span>{candidate.sector} · {fmtMoney(candidate.price)} · {candidate.action}</span>
+              <span>模型分 {candidate.model_score} · 数据质量 {candidate.data_quality.toFixed(0)}% · {candidate.signal}</span>
+              <span>{candidate.reference_source}</span>
               <p>{candidate.reason}</p>
               <button onClick={() => addStockToWatchlist(candidate.ticker)}>加入监控</button>
             </article>
@@ -1144,7 +1403,7 @@ function Watchlist({
         <div className="panel-head">
           <div>
             <h2>模型验证与调教</h2>
-            <p>点击“验证模型”后，用当前股票池批量回测三套策略，并给出参数调教方向。</p>
+            <p>点击“验证模型”后，用短期、中期、长期三段行情批量回测策略，并给出参数调教方向。</p>
           </div>
           <span className="badge">{validation.length ? `${validation.length} 个模型` : "等待验证"}</span>
         </div>
@@ -1153,7 +1412,16 @@ function Watchlist({
             <article key={item.strategy_id} className="advice-card">
               <strong>{item.strategy_id}</strong>
               <b>{pct(item.average_annual_return)}</b>
-              <span>最佳 {item.best_ticker} · 平均回撤 {pct(item.average_max_drawdown)} · 样本 {item.tested}</span>
+              <span>最佳 {item.best_ticker} · 加权回撤 {pct(item.average_max_drawdown)} · 真实数据 {item.valid_samples}/{item.tested}</span>
+              <dl className="period-metrics">
+                <div><dt>短期</dt><dd>{pct(item.short_return)} / {pct(item.short_drawdown)}</dd></div>
+                <div><dt>中期</dt><dd>{pct(item.medium_return)} / {pct(item.medium_drawdown)}</dd></div>
+                <div><dt>长期</dt><dd>{pct(item.long_return)} / {pct(item.long_drawdown)}</dd></div>
+              </dl>
+              <span className={item.data_quality >= 80 ? "quality-ok" : item.data_quality >= 50 ? "quality-warn" : "quality-risk"}>
+                数据质量 {item.data_quality.toFixed(0)}% · {item.data_quality_label}
+                {item.missing_samples ? ` · 缺失 ${item.missing_samples}` : ""}
+              </span>
               <p>{item.tuning_note}</p>
             </article>
           ))}
@@ -1494,17 +1762,43 @@ function Discipline({
   events,
   orders,
   holdings,
+  selectedTicker,
   recordZaManualExecution,
+  submitOfflineTrade,
   importUsmartScreenshot,
   importZaScreenshot
 }: {
   events: DisciplineEvent[];
   orders: Order[];
   holdings: Holding[];
+  selectedTicker: string;
   recordZaManualExecution: () => Promise<void>;
+  submitOfflineTrade: (form: OfflineTradeForm) => Promise<void>;
   importUsmartScreenshot: () => Promise<void>;
   importZaScreenshot: () => Promise<void>;
 }) {
+  const [offlineTrade, setOfflineTrade] = useState<OfflineTradeForm>({
+    broker: "za-bank",
+    ticker: selectedTicker,
+    side: "BUY",
+    qty: "",
+    price: "",
+    executed_at: defaultExecutionTime(),
+    note: ""
+  });
+
+  async function handleOfflineTradeSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await submitOfflineTrade(offlineTrade);
+    setOfflineTrade((current) => ({
+      ...current,
+      qty: "",
+      price: "",
+      note: "",
+      executed_at: defaultExecutionTime()
+    }));
+  }
+
   return (
     <div className="page-grid">
       <section className="panel wide">
@@ -1532,10 +1826,79 @@ function Discipline({
         <div className="panel-head">
           <div>
             <h2>执行记录</h2>
-            <p>ZA Bank 暂按手工确认，执行后在这里补记，后续可做对账。</p>
+            <p>线下券商/App 已成交后，在这里回填，系统会写入本地订单和持仓。</p>
           </div>
           <button onClick={recordZaManualExecution}>记录 ZA 成交</button>
         </div>
+        <form className="offline-trade-form" onSubmit={handleOfflineTradeSubmit}>
+          <label>
+            <span>券商</span>
+            <select
+              value={offlineTrade.broker}
+              onChange={(event) => setOfflineTrade((current) => ({ ...current, broker: event.target.value as OfflineTradeForm["broker"] }))}
+            >
+              <option value="za-bank">ZA Bank</option>
+              <option value="usmart">uSMART</option>
+              <option value="ibkr">IBKR</option>
+              <option value="other">其他</option>
+            </select>
+          </label>
+          <label>
+            <span>股票</span>
+            <input
+              placeholder="NOK.US"
+              value={offlineTrade.ticker}
+              onChange={(event) => setOfflineTrade((current) => ({ ...current, ticker: event.target.value.toUpperCase() }))}
+            />
+          </label>
+          <label>
+            <span>方向</span>
+            <select
+              value={offlineTrade.side}
+              onChange={(event) => setOfflineTrade((current) => ({ ...current, side: event.target.value as OfflineTradeForm["side"] }))}
+            >
+              <option value="BUY">买入</option>
+              <option value="SELL">卖出</option>
+            </select>
+          </label>
+          <label>
+            <span>数量</span>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={offlineTrade.qty}
+              onChange={(event) => setOfflineTrade((current) => ({ ...current, qty: event.target.value }))}
+            />
+          </label>
+          <label>
+            <span>成交价</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={offlineTrade.price}
+              onChange={(event) => setOfflineTrade((current) => ({ ...current, price: event.target.value }))}
+            />
+          </label>
+          <label>
+            <span>成交时间</span>
+            <input
+              type="datetime-local"
+              value={offlineTrade.executed_at}
+              onChange={(event) => setOfflineTrade((current) => ({ ...current, executed_at: event.target.value }))}
+            />
+          </label>
+          <label className="wide-input">
+            <span>备注</span>
+            <input
+              placeholder="例如：ZA App 手动确认，按执行计划买入"
+              value={offlineTrade.note}
+              onChange={(event) => setOfflineTrade((current) => ({ ...current, note: event.target.value }))}
+            />
+          </label>
+          <button type="submit">提交线下交易</button>
+        </form>
         <div className="compact-table">
           {orders.map((order) => (
             <div key={order.id}>

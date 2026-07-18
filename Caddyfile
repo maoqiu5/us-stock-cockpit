@@ -1,0 +1,18 @@
+{
+	email {$TLS_EMAIL}
+}
+
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	redir / /usstock
+
+	route /usstock/api/* {
+		uri strip_prefix /usstock/api
+		reverse_proxy usstock_backend:8000
+	}
+
+	route /usstock* {
+		reverse_proxy usstock_frontend:3000
+	}
+}

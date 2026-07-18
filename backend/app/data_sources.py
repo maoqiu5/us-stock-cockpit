@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 from .models import DataSourceStatus, Holding, MarketQuote, WatchlistItem
 from .historical_prices import _yahoo_intraday_quote, is_us_market_open, previous_close_quotes
+from .market_cache import latest_cached_quotes, save_quotes
 from .seed import WATCHLIST
 
 
@@ -83,20 +84,31 @@ def market_quotes(symbols: Iterable[str] | None = None) -> list[MarketQuote]:
     tickers = [symbol.upper() for symbol in (symbols or FALLBACK_PRICES.keys())]
     if not is_us_market_open():
         quotes, _ = previous_close_quotes(tickers)
-        return quotes
+        return _save_and_fill_quotes(tickers, quotes)
     try:
-        return _fmp_quotes(tickers)
+        return _save_and_fill_quotes(tickers, _fmp_quotes(tickers))
     except Exception:
         pass
     try:
-        return _akshare_quotes(tickers)
+        return _save_and_fill_quotes(tickers, _akshare_quotes(tickers))
     except Exception:
-        return _yahoo_quotes(tickers)
+        return _save_and_fill_quotes(tickers, _yahoo_quotes(tickers))
 
 
-def dynamic_watchlist(items: list[WatchlistItem], holdings: list[Holding] | None = None, validation: dict[str, dict[str, float | str]] | None = None) -> list[WatchlistItem]:
+def _save_and_fill_quotes(tickers: list[str], quotes: list[MarketQuote]) -> list[MarketQuote]:
+    quote_map = {quote.ticker: quote for quote in quotes}
+    missing = [ticker for ticker in tickers if ticker not in quote_map]
+    if missing:
+        for cached in latest_cached_quotes(missing):
+            quote_map.setdefault(cached.ticker, cached.model_copy(update={"source": f"{cached.source} · local-cache"}))
+    output = [quote_map[ticker] for ticker in tickers if ticker in quote_map]
+    save_quotes(output)
+    return output
+
+
+def dynamic_watchlist(items: list[WatchlistItem], holdings: list[Holding] | None = None, validation: dict[str, dict[str, float | str]] | None = None, quotes: dict[str, MarketQuote] | None = None) -> list[WatchlistItem]:
     tickers = [item.ticker for item in items]
-    quotes = {quote.ticker: quote for quote in market_quotes(tickers)}
+    quotes = quotes or {quote.ticker: quote for quote in market_quotes(tickers)}
     holding_map = _holding_context(holdings or [])
     output: list[WatchlistItem] = []
     for item in items:

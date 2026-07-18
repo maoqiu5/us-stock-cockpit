@@ -160,6 +160,17 @@ class Holding(BaseModel):
     updated_at: str
 
 
+class AccountBalance(BaseModel):
+    broker: Literal["za-bank", "usmart", "ibkr", "manual"]
+    name: str
+    available_cash: float
+    holding_value: float
+    account_total: float
+    currency: str = "USD"
+    updated_at: str
+    source: str
+
+
 class PreviousCloseImportResult(BaseModel):
     as_of: str
     source: str
@@ -304,13 +315,40 @@ class HoldingAdvice(BaseModel):
     suggested_weight: float
 
 
+class TradePlanItem(BaseModel):
+    ticker: str
+    name: str
+    broker: str
+    signal: str
+    model_score: int
+    action: str
+    side: Literal["BUY", "SELL", "NONE"]
+    current_weight: float
+    target_weight: float
+    current_amount: float
+    target_amount: float
+    delta_amount: float
+    reference_price: float
+    suggested_qty: int
+    stop_loss_price: float
+    take_profit_price: float
+    confidence: float
+    reason: str
+    blockers: list[str]
+
+
 class CandidateStock(BaseModel):
     ticker: str
     name: str
     sector: str
+    price: float = 0
     score: int
     reason: str
     action: str
+    model_score: int = 0
+    data_quality: float = 0
+    signal: str = "WATCH"
+    reference_source: str = ""
 
 
 class AllocationSuggestion(BaseModel):
@@ -333,9 +371,19 @@ class PortfolioOptimization(BaseModel):
 class ModelValidationItem(BaseModel):
     strategy_id: str
     tested: int
+    valid_samples: int = 0
+    missing_samples: int = 0
+    data_quality: float = 0
+    data_quality_label: str = "无真实数据"
     best_ticker: str
     average_annual_return: float
     average_max_drawdown: float
+    short_return: float = 0
+    short_drawdown: float = 0
+    medium_return: float = 0
+    medium_drawdown: float = 0
+    long_return: float = 0
+    long_drawdown: float = 0
     tuning_note: str
 
 

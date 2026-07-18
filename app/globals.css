@@ -29,6 +29,71 @@ button, input, select {
   font: inherit;
 }
 
+.login-shell {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 45% 20%, rgba(24, 210, 176, 0.08), transparent 32%),
+    linear-gradient(180deg, #060a10, #03060a 58%, #05080d);
+}
+
+.login-panel {
+  display: grid;
+  gap: 18px;
+  width: min(420px, 100%);
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(10, 17, 27, 0.94);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+}
+
+.login-kicker {
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.login-panel h1 {
+  margin: 8px 0 6px;
+  font-size: 26px;
+}
+
+.login-panel p,
+.login-error {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.login-panel label {
+  display: grid;
+  gap: 8px;
+  color: #d8e6e2;
+  font-size: 13px;
+}
+
+.login-panel input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: none;
+  background: #070d15;
+  color: var(--text);
+}
+
+.login-panel input:focus {
+  border-color: var(--line-strong);
+}
+
+.login-error {
+  color: var(--red);
+}
+
 .shell {
   display: grid;
   grid-template-columns: 216px minmax(0, 1fr);
@@ -841,9 +906,224 @@ button:disabled {
   line-height: 1.5;
 }
 
+.period-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin: 12px 0 0;
+}
+
+.period-metrics div {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255,255,255,0.025);
+}
+
+.period-metrics dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.period-metrics dd {
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.quality-ok {
+  color: var(--green) !important;
+}
+
+.quality-warn {
+  color: var(--amber) !important;
+}
+
+.quality-risk {
+  color: var(--red) !important;
+}
+
 .advice-card button {
   margin-top: 12px;
   padding: 0 12px;
+}
+
+.account-balance-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.account-balance-card {
+  min-height: 122px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(7, 14, 22, 0.72);
+}
+
+.account-balance-card span,
+.account-balance-card small,
+.account-balance-card dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-balance-card strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--green);
+  font-size: 22px;
+}
+
+.account-balance-card dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.account-balance-card dd {
+  margin: 3px 0 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.deck-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.deck-summary div {
+  min-height: 74px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255,255,255,0.025);
+}
+
+.deck-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.deck-summary strong {
+  display: block;
+  margin-top: 7px;
+  color: var(--green);
+  font-size: 20px;
+}
+
+.deck-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.deck-plan-card {
+  min-height: 190px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(7, 14, 22, 0.72);
+}
+
+.deck-plan-card.buy {
+  border-color: rgba(24, 210, 176, 0.28);
+}
+
+.deck-plan-card.sell {
+  border-color: rgba(255, 95, 148, 0.28);
+}
+
+.deck-plan-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.deck-plan-card header span,
+.deck-plan-card p {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.execution-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.execution-plan-card {
+  min-height: 220px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(7, 14, 22, 0.74);
+}
+
+.execution-plan-card.buy {
+  border-color: rgba(24, 210, 176, 0.3);
+  background: rgba(24, 210, 176, 0.08);
+}
+
+.execution-plan-card.sell {
+  border-color: rgba(255, 95, 148, 0.3);
+  background: rgba(255, 95, 148, 0.09);
+}
+
+.execution-plan-card header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 12px;
+  align-items: start;
+}
+
+.execution-plan-card header b {
+  color: var(--green);
+  font-size: 18px;
+}
+
+.execution-plan-card header span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.execution-plan-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 14px 0 0;
+}
+
+.execution-plan-card dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.execution-plan-card dd {
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.execution-plan-card p {
+  margin-top: 12px;
+  color: #c3ced9;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.blocker {
+  display: block;
+  margin-top: 10px;
+  color: var(--red);
+  font-size: 12px;
 }
 
 .gold-hero {
@@ -1026,7 +1306,20 @@ button:disabled {
   align-items: end;
 }
 
+.offline-trade-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+
 .gold-trade-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.offline-trade-form label {
   display: grid;
   gap: 7px;
 }
@@ -1036,7 +1329,15 @@ button:disabled {
   font-size: 12px;
 }
 
-.gold-trade-form input {
+.offline-trade-form label span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.gold-trade-form input,
+.gold-trade-form select,
+.offline-trade-form input,
+.offline-trade-form select {
   width: 100%;
   min-height: 42px;
   border: 1px solid var(--line);
@@ -1046,12 +1347,14 @@ button:disabled {
   padding: 0 12px;
 }
 
-.gold-trade-form button {
+.gold-trade-form button,
+.offline-trade-form button {
   min-height: 42px;
   white-space: nowrap;
 }
 
-.gold-trade-form .wide-input {
+.gold-trade-form .wide-input,
+.offline-trade-form .wide-input {
   grid-column: span 2;
 }
 
@@ -1219,13 +1522,15 @@ select, input {
   .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .analysis-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .broker-grid { grid-template-columns: 1fr; }
-  .source-grid, .quote-grid, .advice-grid { grid-template-columns: 1fr; }
+  .source-grid, .quote-grid, .advice-grid, .execution-plan-grid, .account-balance-grid, .deck-summary, .deck-plan-grid { grid-template-columns: 1fr; }
   .execution-panel { grid-template-columns: 1fr; }
   .gold-layout { grid-template-columns: 1fr; }
   .gold-trade-form,
+  .offline-trade-form,
   .gold-trade-summary,
   .gold-trade-list article { grid-template-columns: 1fr; }
-  .gold-trade-form .wide-input { grid-column: span 1; }
+  .gold-trade-form .wide-input,
+  .offline-trade-form .wide-input { grid-column: span 1; }
 }
 
 @media (max-width: 720px) {

@@ -1,0 +1,66 @@
+name: brianhub-usstock
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    environment:
+      FMP_API_KEY: ${FMP_API_KEY}
+      APP_PASSWORD: ${APP_PASSWORD}
+      DATABASE_PATH: /app/data/usstock/usstock_cockpit.db
+      LOCAL_STATE_PATH: /app/data/usstock/local_state.json
+      MARKET_CACHE_DIR: /app/data/usstock/market_cache
+      CORS_ALLOW_ORIGINS: ${PUBLIC_URL}
+      BROKER_MODE: ${BROKER_MODE:-paper}
+      ENABLE_LIVE_TRADING: ${ENABLE_LIVE_TRADING:-false}
+    volumes:
+      - ./data:/app/data
+    networks:
+      brianhub_edge:
+        aliases:
+          - usstock_backend
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        NEXT_PUBLIC_API_BASE: /usstock/api
+        NEXT_PUBLIC_BASE_PATH: /usstock
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      brianhub_edge:
+        aliases:
+          - usstock_frontend
+
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+      TLS_EMAIL: ${TLS_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - brianhub_edge
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  brianhub_edge:
+    name: brianhub_edge
+    external: true

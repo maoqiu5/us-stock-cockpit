@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
+from .market_cache import cached_daily_closes, save_daily_closes
 from .models import MarketQuote
 
 
@@ -35,6 +36,10 @@ def daily_close_series(ticker: str, start_date: str, end_date: str) -> list[tupl
     cache_key = (ticker, start_date, end_date)
     if cache_key in _DAILY_CLOSE_CACHE:
         return _DAILY_CLOSE_CACHE[cache_key]
+    cached = cached_daily_closes(ticker, start_date, end_date)
+    if _has_enough_cached_series(cached, start_date, end_date):
+        _DAILY_CLOSE_CACHE[cache_key] = cached
+        return cached
     yahoo_symbol = _yahoo_symbol(ticker)
     start = datetime.strptime(start_date, "%Y-%m-%d")
     # Yahoo's period2 is exclusive; add one day so the requested end date is included.
@@ -56,8 +61,21 @@ def daily_close_series(ticker: str, start_date: str, end_date: str) -> list[tupl
     ]
     if len(series) < 2:
         raise ValueError(f"insufficient historical closes for {ticker}")
+    save_daily_closes(ticker, series)
+    merged = cached_daily_closes(ticker, start_date, end_date)
+    if len(merged) >= len(series):
+        series = merged
     _DAILY_CLOSE_CACHE[cache_key] = series
     return series
+
+
+def _has_enough_cached_series(series: list[tuple[str, float]], start_date: str, end_date: str) -> bool:
+    if len(series) < 2:
+        return False
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+    expected_trading_days = max(2, round((end - start).days / 7 * 5 * 0.7))
+    return len(series) >= expected_trading_days
 
 
 def validate_yahoo_ticker(ticker: str) -> MarketQuote:
