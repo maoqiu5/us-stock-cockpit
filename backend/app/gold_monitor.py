@@ -122,9 +122,25 @@ def _minsheng_accumulated_gold_quote() -> dict:
 
 
 def _intraday_trend_points(quote: dict) -> list[dict[str, float | str]]:
-    if quote.get("trend_points"):
-        return quote["trend_points"]
-    return []
+    points = quote.get("trend_points") or []
+    if len(points) > 1:
+        return points
+    if _is_bank_gold_trading_session():
+        return points
+    return _closed_session_trend_points(quote, points)
+
+
+def _closed_session_trend_points(quote: dict, points: list[dict]) -> list[dict[str, float | str]]:
+    last_point = points[-1] if points else {}
+    price = round(float(last_point.get("price", quote["price"])), 2)
+    quote_time_label = str(quote.get("time", "")).split(" ", 1)[-1]
+    final_label = str(last_point.get("time") or quote_time_label or "最后报价")
+    synthetic_points = [
+        {"time": f"休市-{index}", "price": price}
+        for index in range(11, 0, -1)
+    ]
+    synthetic_points.append({"time": final_label, "price": price})
+    return synthetic_points
 
 
 def _ccb_accumulated_gold_quote() -> dict:

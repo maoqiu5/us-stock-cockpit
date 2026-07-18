@@ -189,6 +189,9 @@ def test_gold_monitor_uses_last_cache_when_bank_gold_is_closed(monkeypatch, tmp_
     assert "休市" in snapshot.trading_status
     assert "最后报价" in snapshot.trading_status
     assert "缓存" in snapshot.source
+    assert len(snapshot.trend_points) == 12
+    assert snapshot.trend_points[-1].time == "23:59"
+    assert snapshot.trend_points[-1].price == 879.5
 
 
 def test_gold_manual_trade_records_real_offline_execution():
