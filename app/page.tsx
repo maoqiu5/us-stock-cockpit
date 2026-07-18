@@ -10,6 +10,7 @@ import {
   Gauge,
   Layers3,
   LineChart,
+  LogOut,
   PanelLeftClose,
   PanelLeftOpen,
   Play,
@@ -26,6 +27,10 @@ const USMART_SCREENSHOT_PATH =
 const ZA_SCREENSHOT_PATH =
   "/Users/brian/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_5oxgvzo5wkcv21_448a/temp/RWTemp/2026-07/4ce6a65a5e65b7986b40f0da36549bc8.jpg";
 const APP_PASSWORD_STORAGE_KEY = "us-stock-cockpit-password";
+
+function hasStoredAppPassword() {
+  return typeof window !== "undefined" && Boolean(window.localStorage.getItem(APP_PASSWORD_STORAGE_KEY));
+}
 
 type DashboardSummary = {
   account_total: number;
@@ -491,10 +496,10 @@ export default function Home() {
   const [analysisType, setAnalysisType] = useState("offline");
   const [preparedOrder, setPreparedOrder] = useState<PreparedOrder | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => hasStoredAppPassword());
   const [validatingModels, setValidatingModels] = useState(false);
   const [notice, setNotice] = useState("");
-  const [authRequired, setAuthRequired] = useState(false);
+  const [authRequired, setAuthRequired] = useState(() => !hasStoredAppPassword());
   const [passwordInput, setPasswordInput] = useState("");
   const [marketSession, setMarketSession] = useState(() => getUSMarketSession());
   const loadingRef = useRef(false);
@@ -546,16 +551,21 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (authRequired) {
+      setLoading(false);
+      return;
+    }
     load().catch((error) => {
       setLoading(false);
       if (error instanceof Error && error.message === "需要访问密码") {
+        window.localStorage.removeItem(APP_PASSWORD_STORAGE_KEY);
         setAuthRequired(true);
         setNotice("请输入访问密码。");
         return;
       }
       setNotice("后端暂未连接，正在显示前端骨架。");
     });
-  }, [load]);
+  }, [authRequired, load]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setMarketSession(getUSMarketSession()), 30_000);
@@ -563,6 +573,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (authRequired) return undefined;
     const refreshSeconds = marketSession.isOpen ? 60 : data.gold?.is_trading_session ? data.gold.refresh_seconds : 0;
     if (!refreshSeconds) return undefined;
     load().catch(() => setNotice("自动刷新失败，正在保留最近一次数据。"));
@@ -570,19 +581,21 @@ export default function Home() {
       load().catch(() => setNotice("自动刷新失败，正在保留最近一次数据。"));
     }, refreshSeconds * 1000);
     return () => window.clearInterval(timer);
-  }, [data.gold?.is_trading_session, data.gold?.refresh_seconds, load, marketSession.isOpen]);
+  }, [authRequired, data.gold?.is_trading_session, data.gold?.refresh_seconds, load, marketSession.isOpen]);
 
   useEffect(() => {
+    if (authRequired) return undefined;
     if (marketSession.isOpen || data.gold?.is_trading_session) return undefined;
     const timer = window.setInterval(() => {
       loadGold().catch(() => setNotice("黄金盯盘刷新失败，正在保留最近一次数据。"));
     }, (data.gold?.refresh_seconds || 60) * 1000);
     return () => window.clearInterval(timer);
-  }, [data.gold?.is_trading_session, data.gold?.refresh_seconds, loadGold, marketSession.isOpen]);
+  }, [authRequired, data.gold?.is_trading_session, data.gold?.refresh_seconds, loadGold, marketSession.isOpen]);
 
   useEffect(() => {
+    if (authRequired) return;
     runBacktest().catch(() => undefined);
-  }, []);
+  }, [authRequired]);
 
   const bestStrategy = useMemo(
     () => data.strategies.find((strategy) => strategy.id === selectedStrategy) || data.strategies[0],
@@ -765,6 +778,14 @@ export default function Home() {
     }
   }
 
+  function lockApp() {
+    window.localStorage.removeItem(APP_PASSWORD_STORAGE_KEY);
+    setPasswordInput("");
+    setAuthRequired(true);
+    setLoading(false);
+    setNotice("已锁定，请重新输入访问密码。");
+  }
+
   if (authRequired) {
     return (
       <main className="login-shell">
@@ -842,7 +863,10 @@ export default function Home() {
             <span className="pill local">本地纪律模式</span>
             <span className="pill">{marketSession.label}</span>
             <span className="pill">{marketSession.refreshLabel}</span>
-            <button className="sync">登录同步</button>
+            <button className="sync" type="button" onClick={lockApp}>
+              <LogOut size={15} />
+              锁定
+            </button>
             <button className="sync" onClick={() => data.summary && toggleAutomation(data.summary.automation_paused)}>
               {data.summary?.automation_paused ? <Play size={15} /> : <CirclePause size={15} />}
               {data.summary?.automation_paused ? "恢复自动执行" : "暂停自动执行"}
