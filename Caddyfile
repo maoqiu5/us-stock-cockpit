@@ -16,6 +16,23 @@
 		reverse_proxy usstock_frontend:3000
 	}
 
+	handle_path /maildesk/api/* {
+		reverse_proxy maildesk_backend:8000
+	}
+
+	redir /maildesk/wps-browser /maildesk/wps-browser/vnc.html?autoconnect=1&resize=scale 302
+
+	handle_path /maildesk/wps-browser/* {
+		basic_auth {
+			brian $2a$14$MCunOanDc.qbGF8uSVceNewpwLrAVTxgeU.D2VQ2cA/IJTTKIMIsO
+		}
+		reverse_proxy 172.19.0.1:6080
+	}
+
+	handle /maildesk* {
+		reverse_proxy maildesk_frontend:3000
+	}
+
 	route /cnstock/api/* {
 		uri strip_prefix /cnstock/api
 		reverse_proxy cnstock_backend:8000

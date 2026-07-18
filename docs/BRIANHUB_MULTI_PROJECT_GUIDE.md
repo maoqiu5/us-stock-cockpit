@@ -8,6 +8,7 @@
 | --- | --- | --- | --- | --- | --- |
 | 美股驾驶舱 | `/usstock` | `/root/apps/us-stock-cockpit` | `/root/apps/us-stock-cockpit/data/usstock` | `usstock_cockpit.db` | `/usstock/api/*` |
 | A股驾驶舱 | `/cnstock` | `/root/apps/cnstock` | `/root/apps/cnstock/data/cnstock` | `cnstock_cockpit.db` | `/cnstock/api/*` |
+| 每日邮件 Maildesk | `/maildesk` | `/root/apps/maildesk` | `/root/apps/maildesk/data/maildesk` | `maildesk.db` | `/maildesk/api/*` |
 
 当前公开入口：
 
@@ -15,7 +16,27 @@
 - 美股 API：`https://brianhub.net/usstock/api/*`
 - A股前端：`https://brianhub.net/cnstock`
 - A股 API：`https://brianhub.net/cnstock/api/*`
+- Maildesk 前端：`https://brianhub.net/maildesk`
+- Maildesk API：`https://brianhub.net/maildesk/api/*`
 - 根路径：`https://brianhub.net/` 自动跳转到 `/usstock`
+
+## Caddy 所属权
+
+当前短期方案：
+
+- Caddy 仍运行在美股项目 Compose 内：`/root/apps/us-stock-cockpit`。
+- Caddyfile 的 Git 版本暂时以本机 `/Users/brian/Documents/美股/Caddyfile` 为准。
+- 该 Caddyfile 必须同时包含 `/usstock`、`/cnstock`、`/maildesk` 三个项目路由。
+- 后续更新任一项目业务代码时，不需要改 Caddy；只有新增项目、改路径、改反代目标时才改 Caddy。
+- 禁止在服务器临时手改 Caddyfile 后不回写 Git，否则下一次 usstock 部署会覆盖路由。
+
+长期推荐方案：
+
+- 新建独立基础设施仓库 `brianhub-gateway`。
+- 服务器目录迁移为 `/root/apps/brianhub-gateway`。
+- Caddy 只由 gateway Compose 管理，业务项目不再包含 Caddy。
+- 三个业务项目只启动自己的 backend/frontend，并加入共享网络 `brianhub_edge`。
+- 之后新增/修改路由只提交 gateway 仓库，不再碰 usstock/cnstock/maildesk 业务仓库。
 
 当前代码来源：
 
