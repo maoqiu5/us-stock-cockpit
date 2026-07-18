@@ -1,4 +1,9 @@
 {
+	# Legacy reference only. The production gateway now belongs in:
+	# /root/apps/brianhub-gateway
+	# /Users/brian/Documents/brianhub-gateway
+	# Do not deploy this file from the usstock project after gateway migration.
+
 	email {$TLS_EMAIL}
 }
 
@@ -25,7 +30,7 @@
 
 	handle_path /maildesk/wps-browser/* {
 		basic_auth {
-			brian $2a$14$MCunOanDc.qbGF8uSVceNewpwLrAVTxgeU.D2VQ2cA/IJTTKIMIsO
+			brian {$MAILDESK_WPS_BASIC_AUTH_HASH}
 		}
 		reverse_proxy 172.19.0.1:6080
 	}

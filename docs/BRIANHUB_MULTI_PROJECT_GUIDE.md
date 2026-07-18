@@ -20,19 +20,19 @@
 - Maildesk API：`https://brianhub.net/maildesk/api/*`
 - 根路径：`https://brianhub.net/` 自动跳转到 `/usstock`
 
-## Caddy 所属权
+## Gateway 所属权
 
-当前短期方案：
+长期方案：
 
-- Caddy 仍运行在美股项目 Compose 内：`/root/apps/us-stock-cockpit`。
-- Caddyfile 的 Git 版本暂时以本机 `/Users/brian/Documents/美股/Caddyfile` 为准。
-- 该 Caddyfile 必须同时包含 `/usstock`、`/cnstock`、`/maildesk` 三个项目路由。
+- Caddy 独立运行在 `brianhub-gateway` 项目：`/root/apps/brianhub-gateway`。
+- Gateway 的 Git 版本以本机 `/Users/brian/Documents/brianhub-gateway/Caddyfile` 为准。
+- Gateway Caddyfile 必须同时包含 `/usstock`、`/cnstock`、`/maildesk` 三个项目路由。
 - 后续更新任一项目业务代码时，不需要改 Caddy；只有新增项目、改路径、改反代目标时才改 Caddy。
-- 禁止在服务器临时手改 Caddyfile 后不回写 Git，否则下一次 usstock 部署会覆盖路由。
+- 禁止在服务器临时手改 Caddyfile 后不回写 Git，否则下一次 gateway 部署会覆盖路由。
 - 每个业务项目只负责自己的 backend/frontend 容器，不允许单独启动 Caddy/Nginx 监听 `80/443`。
 - `usstock`、`cnstock`、`maildesk` 都必须接入同一个 Docker 外部网络：`brianhub_edge`。
 
-当前 Caddyfile 必须保留以下基础路由：
+Gateway Caddyfile 必须保留以下基础路由：
 
 ```caddyfile
 route /usstock/api/* {
@@ -73,15 +73,13 @@ route /maildesk* {
 - 只有新增项目、修改访问路径、修改反代目标、修改 TLS/基础认证时，才修改 `Caddyfile`。
 - 修改 `Caddyfile` 前先确认 `/usstock`、`/cnstock`、`/maildesk` 三组路由都仍然保留。
 
-长期推荐方案：
+项目职责：
 
-- 新建独立基础设施仓库：`maoqiu5/brianhub-gateway`。
-- 新建服务器目录：`/root/apps/brianhub-gateway`。
 - `brianhub-gateway` 只管理 Caddy、TLS、路由和统一入口。
 - `usstock` 只管理 `usstock_backend` / `usstock_frontend`。
 - `cnstock` 只管理 `cnstock_backend` / `cnstock_frontend`。
 - `maildesk` 只管理 `maildesk_backend` / `maildesk_frontend`。
-- 迁移完成前，不要擅自删除 usstock 项目里的 Caddy 服务。
+- 旧 usstock Caddy 只作为迁移前回滚参考，不再作为长期入口。
 
 当前代码来源：
 
@@ -152,7 +150,7 @@ services:
           - usstock_frontend
 ```
 
-`Caddyfile` 中美股路由：
+Gateway `Caddyfile` 中美股路由：
 
 ```caddyfile
 route /usstock/api/* {
@@ -235,7 +233,7 @@ route /demoapp* {
 }
 ```
 
-重要：当前 Caddy 运行在美股项目 Compose 内，已经占用服务器 `80/443`。后续新项目不要再启动自己的 Caddy 监听 `80/443`，否则端口会冲突。新项目只启动自己的 frontend/backend，并接入 `brianhub_edge` 网络，再让现有 Caddy 转发。
+重要：Caddy 运行在独立 `brianhub-gateway` Compose 内，占用服务器 `80/443`。后续新项目不要再启动自己的 Caddy 监听 `80/443`，否则端口会冲突。新项目只启动自己的 frontend/backend，并接入 `brianhub_edge` 网络，再让 gateway 转发。
 
 ## GitHub 发布流程
 
@@ -312,17 +310,18 @@ curl -sL https://brianhub.net/usstock/_next/static/chunks/app/page-文件名.js 
 ```text
 /root/apps/
   us-stock-cockpit/     # 美股，当前已上线
-  demoapp/              # 示例：未来某个新项目
-  gateway/              # 未来如果要抽离统一 Caddy，可放这里
+  cnstock/              # A 股
+  maildesk/             # 每日邮件
+  brianhub-gateway/     # 统一 Caddy / TLS / 路由入口
 ```
 
-当前阶段 Caddy 在：
+长期阶段 Caddy 在：
 
 ```text
-/root/apps/us-stock-cockpit/Caddyfile
+/root/apps/brianhub-gateway/Caddyfile
 ```
 
-未来项目上线时，只允许修改 Caddy 路由，不要移动或删除美股数据。
+业务项目上线或更新时，只部署自己的 backend/frontend，不要移动或删除其它项目数据，也不要在业务项目里维护 Caddy 路由。
 
 ## 数据备份规则
 

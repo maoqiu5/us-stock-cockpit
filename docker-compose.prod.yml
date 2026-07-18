@@ -37,29 +37,6 @@ services:
         aliases:
           - usstock_frontend
 
-  caddy:
-    image: caddy:2.8
-    restart: unless-stopped
-    depends_on:
-      - frontend
-      - backend
-    environment:
-      APP_DOMAIN: ${APP_DOMAIN}
-      TLS_EMAIL: ${TLS_EMAIL}
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    networks:
-      - brianhub_edge
-
-volumes:
-  caddy_data:
-  caddy_config:
-
 networks:
   brianhub_edge:
     name: brianhub_edge

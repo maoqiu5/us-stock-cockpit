@@ -7,7 +7,7 @@
 
 ## 1. 当前一句话状态
 
-项目已经从本机美股驾驶舱升级到公网 VPS 临时上线阶段：前后端 Docker/Caddy 配置已补齐，访问密码已加入，SQLite 数据库已接入并完成本地 JSON 迁移。RackNerd VPS 已购买并部署成功，当前可通过服务器 IP 临时访问；域名/HTTPS 绑定仍待用户完成域名购买和 DNS 配置。
+项目已经上线到 BrianHub，生产访问路径是 `https://brianhub.net/usstock`。美股项目只负责 `usstock_backend` / `usstock_frontend`、SQLite 数据和业务逻辑；统一 HTTPS 入口、TLS、Caddy 路由已按长期方案剥离到独立 `brianhub-gateway` 项目。
 
 ## 2. 用户目标
 
@@ -36,6 +36,7 @@
 - 临时访问地址：`http://192.236.235.229`
 - 已安装 Docker、Docker Compose v2、Git、rsync。
 - 项目部署目录：`/root/apps/us-stock-cockpit`
+- 统一入口目录：`/root/apps/brianhub-gateway`
 - 线上访问密码存放在服务器：`/root/apps/us-stock-cockpit/.app_password`
 - 不要把访问密码写进 Git 或文档。
 - RackNerd 优惠码曾建议尝试：

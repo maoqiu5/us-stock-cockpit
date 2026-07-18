@@ -1,15 +1,17 @@
 # 美股驾驶舱上线部署说明
 
-目标：把本地 Next.js 前端、FastAPI 后端、账户状态文件和行情缓存部署到一台云服务器，通过一个 HTTPS 域名随时访问。
+目标：把本地 Next.js 前端、FastAPI 后端、账户状态文件和行情缓存部署到 VPS。公网 HTTPS 入口由独立 `brianhub-gateway` 项目统一管理。
 
 ## 推荐架构
 
 - `frontend`：Next.js 页面，生产构建挂载在 `/usstock`，API 使用 `/usstock/api`。
 - `backend`：FastAPI 服务，读取并写入 `/app/data/usstock/` 下的美股专属数据。
-- `caddy`：统一入口，自动申请 HTTPS 证书。
-  - `https://你的域名/` -> 跳转到 `/usstock`
-  - `https://你的域名/usstock` -> 美股前端
-  - `https://你的域名/usstock/api/*` -> 美股后端
+- `brianhub-gateway`：统一入口，自动申请 HTTPS 证书。
+  - `https://brianhub.net/` -> 跳转到 `/usstock`
+  - `https://brianhub.net/usstock` -> 美股前端
+  - `https://brianhub.net/usstock/api/*` -> 美股后端
+
+美股项目自身不再启动 Caddy，也不监听服务器 `80/443`。
 
 ## 重要安全设置
 
@@ -23,10 +25,7 @@
 
 任意支持 Docker 的 VPS 都可以，例如 Ubuntu 22.04/24.04。
 
-服务器需要开放：
-
-- `80/tcp`
-- `443/tcp`
+服务器 `80/tcp` 和 `443/tcp` 只由 `brianhub-gateway` 监听。美股项目只需要加入外部 Docker 网络 `brianhub_edge`。
 
 安装 Docker 和 Compose 后，把项目放到服务器，例如：
 
@@ -50,9 +49,7 @@ cp .env.production.example .env.production
 填写：
 
 ```dotenv
-APP_DOMAIN=stock.example.com
-PUBLIC_URL=https://stock.example.com
-TLS_EMAIL=you@example.com
+PUBLIC_URL=https://brianhub.net
 APP_PASSWORD=一个强密码
 FMP_API_KEY=你的FMPKey
 BROKER_MODE=paper
@@ -96,7 +93,7 @@ rsync -av data/ user@server:~/apps/us-stock-cockpit/data/
 ## 启动
 
 ```bash
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build backend frontend
 ```
 
 查看状态：
@@ -109,13 +106,13 @@ docker compose --env-file .env.production -f docker-compose.prod.yml logs -f bac
 健康检查：
 
 ```bash
-curl https://stock.example.com/api/health
+curl https://brianhub.net/usstock/api/health
 ```
 
 浏览器打开：
 
 ```text
-https://stock.example.com
+https://brianhub.net/usstock
 ```
 
 第一次进入会要求输入 `APP_PASSWORD`。
@@ -126,7 +123,7 @@ https://stock.example.com
 
 ```bash
 git pull
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build backend frontend
 ```
 
 或者直接运行：
@@ -178,9 +175,9 @@ docker compose --env-file .env.production -f docker-compose.prod.yml logs -f bac
 docker compose --env-file .env.production -f docker-compose.prod.yml restart backend
 ```
 
-### HTTPS 证书没有生成
+### HTTPS 证书或路由异常
 
-确认域名 A 记录已经指向服务器公网 IP，并且服务器防火墙放行 80 和 443。
+到 `/root/apps/brianhub-gateway` 检查 Caddy 日志。美股项目不再持有 TLS 和 Caddy 配置。
 
 ### 数据没有持久化
 

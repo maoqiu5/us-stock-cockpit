@@ -10,5 +10,5 @@ if [ ! -f ".env.production" ]; then
 fi
 
 git pull --ff-only
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build backend frontend
 docker compose --env-file .env.production -f docker-compose.prod.yml ps
