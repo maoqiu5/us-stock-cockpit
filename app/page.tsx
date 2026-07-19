@@ -5,7 +5,6 @@ import {
   BarChart3,
   Bot,
   CirclePause,
-  Coins,
   Database,
   Gauge,
   Layers3,
@@ -211,63 +210,6 @@ type ZABankScreenshotResult = {
   holdings: Holding[];
 };
 
-type GoldMonitor = {
-  product_code: string;
-  product_name: string;
-  product_type: string;
-  trading_status: string;
-  risk_level: string;
-  currency: string;
-  planned_capital: number;
-  live_price: number;
-  change: number;
-  pct_change: number;
-  day_high: number;
-  day_low: number;
-  reference_price: number;
-  quote_time: string;
-  min_purchase_amount: number;
-  increment_amount: number;
-  buy_fee_rate: number;
-  estimated_grams: number;
-  first_order_amount: number;
-  first_order_grams: number;
-  reserve_cash: number;
-  remaining_capital: number;
-  holding_grams: number;
-  holding_cost: number;
-  holding_market_value: number;
-  holding_pnl: number;
-  holding_pnl_pct: number;
-  average_cost: number;
-  reference_symbol: string;
-  reference_name: string;
-  reference_change_pct: number;
-  reference_time: string;
-  is_trading_session: boolean;
-  refresh_seconds: number;
-  trend_points: { time: string; price: number }[];
-  trade_rule: string;
-  settlement_rule: string;
-  action: string;
-  confidence: number;
-  advice: string;
-  watch_points: string[];
-  source: string;
-};
-
-type GoldManualTrade = {
-  id: string;
-  product_code: string;
-  product_name: string;
-  side: "BUY" | "SELL";
-  amount_cny: number;
-  grams: number;
-  price: number;
-  executed_at: string;
-  note: string;
-};
-
 type PreviousCloseImportResult = {
   as_of: string;
   source: string;
@@ -380,15 +322,12 @@ type AppData = {
   tradePlan: TradePlanItem[];
   candidates: CandidateStock[];
   allocation: PortfolioOptimization | null;
-  gold: GoldMonitor | null;
-  goldTrades: GoldManualTrade[];
 };
 
 const nav = [
   { id: "dashboard", label: "驾驶舱", key: "D", icon: Gauge },
   { id: "strategies", label: "策略模型", key: "S", icon: SlidersHorizontal },
   { id: "watchlist", label: "股票池", key: "W", icon: Layers3 },
-  { id: "gold", label: "黄金盯盘", key: "G", icon: Coins },
   { id: "discipline", label: "持仓纪律", key: "H", icon: ShieldCheck },
   { id: "analysis", label: "模型分析", key: "A", icon: BarChart3 }
 ] as const;
@@ -398,16 +337,7 @@ const fmtMoney = (value: number) =>
 
 const roundMoney = (value: number) => Math.round(value * 100) / 100;
 
-const fmtCny = (value: number) =>
-  new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
-
 const pct = (value: number) => `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
-
-const currentLocalInputValue = () => {
-  const now = new Date();
-  const offsetMs = now.getTimezoneOffset() * 60_000;
-  return new Date(now.getTime() - offsetMs).toISOString().slice(0, 16);
-};
 
 const defaultPriceForTicker = (ticker: string) =>
   ({ "NOK.US": 11.23, "SMR.US": 8.36, NOK: 11.25, IAU: 76.28, NVDA: 212.5 }[ticker] || 100);
@@ -497,9 +427,7 @@ export default function Home() {
     accountBalances: [],
     tradePlan: [],
     candidates: [],
-    allocation: null,
-    gold: null,
-    goldTrades: []
+    allocation: null
   });
   const [newTicker, setNewTicker] = useState("");
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
@@ -516,7 +444,6 @@ export default function Home() {
   const [passwordInput, setPasswordInput] = useState("");
   const [marketSession, setMarketSession] = useState(() => getUSMarketSession());
   const loadingRef = useRef(false);
-  const goldLoadingRef = useRef(false);
 
   const load = useCallback(async () => {
     if (loadingRef.current) return;
@@ -549,34 +476,8 @@ export default function Home() {
       fetchJson<CandidateStock[]>("/screening/candidates")
         .then((candidates) => setData((current) => ({ ...current, candidates })))
         .catch(() => setNotice("候选股真实筛选较慢，已先显示持仓和股票池数据。"));
-      if (!goldLoadingRef.current) {
-        goldLoadingRef.current = true;
-        Promise.all([
-          fetchJson<GoldMonitor>("/gold/monitor", undefined, 8000),
-          fetchJson<GoldManualTrade[]>("/gold/manual-trades", undefined, 8000)
-        ])
-          .then(([gold, goldTrades]) => setData((current) => ({ ...current, gold, goldTrades })))
-          .catch(() => setNotice("黄金盯盘接口较慢，已先显示美股账户和股票池数据。"))
-          .finally(() => {
-            goldLoadingRef.current = false;
-          });
-      }
     } finally {
       loadingRef.current = false;
-    }
-  }, []);
-
-  const loadGold = useCallback(async () => {
-    if (goldLoadingRef.current) return;
-    goldLoadingRef.current = true;
-    try {
-      const [gold, goldTrades] = await Promise.all([
-        fetchJson<GoldMonitor>("/gold/monitor", undefined, 8000),
-        fetchJson<GoldManualTrade[]>("/gold/manual-trades", undefined, 8000)
-      ]);
-      setData((current) => ({ ...current, gold, goldTrades }));
-    } finally {
-      goldLoadingRef.current = false;
     }
   }, []);
 
@@ -604,23 +505,14 @@ export default function Home() {
 
   useEffect(() => {
     if (authRequired) return undefined;
-    const refreshSeconds = marketSession.isOpen ? 60 : data.gold?.is_trading_session ? data.gold.refresh_seconds : 0;
+    const refreshSeconds = marketSession.isOpen ? 60 : 0;
     if (!refreshSeconds) return undefined;
     load().catch(() => setNotice("自动刷新失败，正在保留最近一次数据。"));
     const timer = window.setInterval(() => {
       load().catch(() => setNotice("自动刷新失败，正在保留最近一次数据。"));
     }, refreshSeconds * 1000);
     return () => window.clearInterval(timer);
-  }, [authRequired, data.gold?.is_trading_session, data.gold?.refresh_seconds, load, marketSession.isOpen]);
-
-  useEffect(() => {
-    if (authRequired) return undefined;
-    if (marketSession.isOpen || data.gold?.is_trading_session) return undefined;
-    const timer = window.setInterval(() => {
-      loadGold().catch(() => setNotice("黄金盯盘刷新失败，正在保留最近一次数据。"));
-    }, (data.gold?.refresh_seconds || 60) * 1000);
-    return () => window.clearInterval(timer);
-  }, [authRequired, data.gold?.is_trading_session, data.gold?.refresh_seconds, loadGold, marketSession.isOpen]);
+  }, [authRequired, load, marketSession.isOpen]);
 
   useEffect(() => {
     if (authRequired) return;
@@ -940,7 +832,6 @@ export default function Home() {
             validatingModels={validatingModels}
           />
         )}
-        {active === "gold" && data.gold && <GoldWatch monitor={data.gold} trades={data.goldTrades} loadGold={loadGold} setNotice={setNotice} />}
         {active === "discipline" && (
           <Discipline
             events={data.events}
@@ -1499,313 +1390,6 @@ function Watchlist({
               <small>{quote.source} · {quote.updated_at}</small>
             </article>
           ))}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function GoldWatch({
-  monitor,
-  trades,
-  loadGold,
-  setNotice
-}: {
-  monitor: GoldMonitor;
-  trades: GoldManualTrade[];
-  loadGold: () => Promise<void>;
-  setNotice: (notice: string) => void;
-}) {
-  const [tradeForm, setTradeForm] = useState({
-    executed_at: currentLocalInputValue(),
-    amount_cny: monitor.first_order_amount.toFixed(2),
-    grams: "",
-    price: monitor.live_price.toFixed(2),
-    note: ""
-  });
-
-  const trend = useMemo(() => {
-    const width = 720;
-    const height = 260;
-    const plot = { left: 58, right: 18, top: 18, bottom: 38 };
-    const prices = monitor.trend_points.map((point) => point.price);
-    const min = Math.min(...prices, monitor.day_low);
-    const max = Math.max(...prices, monitor.day_high);
-    const span = Math.max(max - min, 0.01);
-    const plotWidth = width - plot.left - plot.right;
-    const plotHeight = height - plot.top - plot.bottom;
-    const points = monitor.trend_points.map((point, index) => {
-      const x = plot.left + (index / Math.max(monitor.trend_points.length - 1, 1)) * plotWidth;
-      const y = plot.top + ((max - point.price) / span) * plotHeight;
-      return { ...point, x, y };
-    });
-    const yTicks = [max, (max + min) / 2, min].map((price) => ({
-      price,
-      y: plot.top + ((max - price) / span) * plotHeight,
-    }));
-    const xTicks = points.filter((_, index) => index === 0 || index === Math.floor(points.length / 2) || index === points.length - 1);
-    return {
-      width,
-      height,
-      min,
-      max,
-      line: points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" "),
-      points,
-      plot,
-      yTicks,
-      xTicks,
-    };
-  }, [monitor]);
-
-  const plannedGrams = Number(tradeForm.grams) || (Number(tradeForm.amount_cny) && Number(tradeForm.price) ? Number(tradeForm.amount_cny) / Number(tradeForm.price) : 0);
-  const totalGoldGrams = trades.reduce((sum, trade) => sum + (trade.side === "BUY" ? trade.grams : -trade.grams), 0);
-  const totalGoldCost = trades.reduce((sum, trade) => sum + (trade.side === "BUY" ? trade.amount_cny : -trade.amount_cny), 0);
-  const averageGoldCost = totalGoldGrams > 0 ? totalGoldCost / totalGoldGrams : 0;
-
-  async function recordGoldTrade(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const amount = Number(tradeForm.amount_cny);
-    const price = Number(tradeForm.price);
-    const grams = tradeForm.grams ? Number(tradeForm.grams) : undefined;
-    if (!amount || !price) {
-      setNotice("请填写有效的黄金成交金额和成交价。");
-      return;
-    }
-    await fetchJson<GoldManualTrade>("/gold/manual-trades", {
-      method: "POST",
-      body: JSON.stringify({
-        side: "BUY",
-        amount_cny: amount,
-        grams,
-        price,
-        executed_at: tradeForm.executed_at.replace("T", " "),
-        note: tradeForm.note
-      })
-    });
-    setTradeForm((current) => ({ ...current, grams: "", note: "" }));
-    await loadGold();
-    setNotice("已记录一笔黄金线下买入，后续分析会纳入这笔成交。");
-  }
-
-  async function deleteGoldTrade(tradeId: string) {
-    await fetchJson(`/gold/manual-trades/${tradeId}`, { method: "DELETE" });
-    await loadGold();
-    setNotice("已删除一笔黄金线下记录，持仓收益和策略建议已重算。");
-  }
-
-  return (
-    <div className="page-grid gold-page">
-      <Metric label="剩余资金" value={fmtCny(monitor.remaining_capital)} hint={`计划 ${fmtCny(monitor.planned_capital)} · 已投入 ${fmtCny(monitor.holding_cost)}`} tone="amber" icon={Coins} />
-      <Metric label="实时金价" value={`¥${monitor.live_price.toFixed(2)}/克`} hint={`${monitor.trading_status} · ${monitor.quote_time}`} tone={monitor.pct_change < 0 ? "danger" : "green"} />
-      <Metric label="持仓收益" value={fmtCny(monitor.holding_pnl)} hint={`${pct(monitor.holding_pnl_pct)} · 市值 ${fmtCny(monitor.holding_market_value)}`} tone={monitor.holding_pnl < 0 ? "danger" : "green"} />
-      <Metric label="成本均价（元/克）" value={monitor.average_cost ? `¥${monitor.average_cost.toFixed(2)}` : "未持仓"} hint={`持仓 ${monitor.holding_grams.toFixed(4)} 克`} tone="amber" />
-
-      <section className="panel wide gold-hero">
-        <div className="panel-head">
-          <div>
-            <h2>民生积存金盯盘</h2>
-            <p>{monitor.product_name} 当前按银行积存金公开分时价作为参考锚，剩余资金 {fmtCny(monitor.remaining_capital)}；系统只做盯盘和纪律分析，不自动交易。</p>
-          </div>
-          <div className="button-row">
-            <span className="badge">{monitor.risk_level}</span>
-            <button onClick={loadGold}>刷新黄金数据</button>
-          </div>
-        </div>
-        <div className="gold-layout">
-          <div className="gold-position">
-            <span>当前金价</span>
-            <strong>¥{monitor.live_price.toFixed(2)}/克</strong>
-            <dl>
-              <div><dt>今日涨跌</dt><dd>{monitor.change.toFixed(2)} / {pct(monitor.pct_change)}</dd></div>
-              <div><dt>日内高低</dt><dd>{monitor.day_high.toFixed(2)} / {monitor.day_low.toFixed(2)}</dd></div>
-              <div><dt>持仓收益</dt><dd>{fmtCny(monitor.holding_pnl)} / {pct(monitor.holding_pnl_pct)}</dd></div>
-              <div><dt>成本均价</dt><dd>{monitor.average_cost ? `¥${monitor.average_cost.toFixed(2)}/克` : "未持仓"}</dd></div>
-              <div><dt>买入规则</dt><dd>{fmtCny(monitor.min_purchase_amount)} 起，{fmtCny(monitor.increment_amount)} 递增</dd></div>
-            </dl>
-          </div>
-          <div className="gold-advice">
-            <span>当前建议</span>
-            <strong>{monitor.action}</strong>
-            <p>{monitor.advice}</p>
-            <em>置信度 {Math.round(monitor.confidence * 100)}%</em>
-          </div>
-        </div>
-      </section>
-
-      <section className="panel wide">
-        <div className="panel-head">
-          <div>
-            <h2>实时走势线</h2>
-            <p>{monitor.reference_name} 分钟级走势；交易时段每 {monitor.refresh_seconds} 秒刷新一次，行情时间 {monitor.quote_time}。</p>
-          </div>
-          <span className="badge">{monitor.is_trading_session ? "交易时段" : "非交易时段"}</span>
-        </div>
-        <div className="gold-trend">
-          <svg viewBox={`0 0 ${trend.width} ${trend.height}`} role="img" aria-label="民生积存金实时走势线">
-            {trend.yTicks.map((tick) => (
-              <g key={tick.price}>
-                <line className="trend-grid" x1={trend.plot.left} x2={trend.width - trend.plot.right} y1={tick.y} y2={tick.y} />
-                <text className="trend-y-label" x={8} y={tick.y + 4}>{tick.price.toFixed(2)}</text>
-              </g>
-            ))}
-            <line className="trend-axis" x1={trend.plot.left} x2={trend.width - trend.plot.right} y1={trend.height - trend.plot.bottom} y2={trend.height - trend.plot.bottom} />
-            {trend.xTicks.map((tick) => (
-              <text className="trend-x-label" key={tick.time} x={tick.x} y={trend.height - 12}>{tick.time}</text>
-            ))}
-            <polyline className="trend-line" points={trend.line} />
-            {trend.points.map((point) => (
-              <g
-                className="trend-point"
-                key={`${point.time}-${point.price}`}
-              >
-                <circle className="trend-hit" cx={point.x} cy={point.y} r={14} />
-                <circle className="trend-dot" cx={point.x} cy={point.y} r={point.time === "18:31" ? 5 : 3.5} />
-                <g
-                  className="trend-point-tooltip-svg"
-                  transform={`translate(${point.x > trend.width - 140 ? point.x - 118 : point.x + 12}, ${point.y < 60 ? point.y + 16 : point.y - 50})`}
-                >
-                  <rect width="106" height="40" rx="7" />
-                  <text x="10" y="16">{point.time}</text>
-                  <text x="10" y="31">¥{point.price.toFixed(2)}/克</text>
-                </g>
-                <title>{`${point.time} · ¥${point.price.toFixed(2)}/克`}</title>
-              </g>
-            ))}
-            {trend.points.length === 0 && (
-              <text className="trend-empty-label" x={trend.width / 2} y={trend.height / 2}>
-                暂无真实分时点
-              </text>
-            )}
-          </svg>
-        </div>
-      </section>
-
-      <section className="panel wide">
-        <div className="panel-head">
-          <div>
-            <h2>线下操作记录</h2>
-            <p>记录你在银行 App 实际成交的积存金，系统只使用真实输入，不自动补齐成交。</p>
-          </div>
-          <span className="badge">{trades.length ? `${trades.length} 笔记录` : "暂无记录"}</span>
-        </div>
-        <form className="gold-trade-form" onSubmit={recordGoldTrade}>
-          <label>
-            <span>成交时间</span>
-            <input
-              type="datetime-local"
-              value={tradeForm.executed_at}
-              onChange={(event) => setTradeForm((current) => ({ ...current, executed_at: event.target.value }))}
-            />
-          </label>
-          <label>
-            <span>买入金额</span>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={tradeForm.amount_cny}
-              onChange={(event) => setTradeForm((current) => ({ ...current, amount_cny: event.target.value }))}
-            />
-          </label>
-          <label>
-            <span>成交价/克</span>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={tradeForm.price}
-              onChange={(event) => setTradeForm((current) => ({ ...current, price: event.target.value }))}
-            />
-          </label>
-          <label>
-            <span>成交克数</span>
-            <input
-              type="number"
-              min="0"
-              step="0.0001"
-              placeholder={plannedGrams ? plannedGrams.toFixed(4) : "可留空自动计算"}
-              value={tradeForm.grams}
-              onChange={(event) => setTradeForm((current) => ({ ...current, grams: event.target.value }))}
-            />
-          </label>
-          <label className="wide-input">
-            <span>备注</span>
-            <input
-              placeholder="例如：民生 App 手动买入"
-              value={tradeForm.note}
-              onChange={(event) => setTradeForm((current) => ({ ...current, note: event.target.value }))}
-            />
-          </label>
-          <button type="submit">记录买入</button>
-        </form>
-        <div className="gold-trade-summary">
-          <div><span>累计克数</span><strong>{totalGoldGrams.toFixed(4)} 克</strong></div>
-          <div><span>累计投入</span><strong>{fmtCny(totalGoldCost)}</strong></div>
-          <div><span>平均成本</span><strong>{averageGoldCost ? `¥${averageGoldCost.toFixed(2)}/克` : "未形成"}</strong></div>
-          <div><span>按现价估值</span><strong>{fmtCny(totalGoldGrams * monitor.live_price)}</strong></div>
-        </div>
-        <div className="gold-trade-list">
-          {trades.map((trade) => (
-            <article key={trade.id}>
-              <div>
-                <strong>{trade.executed_at}</strong>
-                <span>{trade.note || trade.product_name}</span>
-              </div>
-              <b>{trade.grams.toFixed(4)} 克</b>
-              <span>{fmtCny(trade.amount_cny)} · ¥{trade.price.toFixed(2)}/克</span>
-              <button type="button" onClick={() => deleteGoldTrade(trade.id)}>删除</button>
-            </article>
-          ))}
-          {!trades.length && <p>还没有线下成交记录。你买入后在这里补一笔，系统就能按真实仓位分析。</p>}
-        </div>
-      </section>
-
-      <section className="panel wide">
-        <div className="panel-head">
-          <div>
-            <h2>交易纪律</h2>
-            <p>{monitor.settlement_rule}</p>
-          </div>
-          <span className="badge">{monitor.trade_rule}</span>
-        </div>
-        <div className="advice-grid">
-          {monitor.watch_points.map((point) => (
-            <article className="advice-card medium" key={point}>
-              <strong>纪律检查</strong>
-              <b>执行前确认</b>
-              <p>{point}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="panel wide">
-        <div className="panel-head">
-          <div>
-            <h2>黄金参考指标</h2>
-            <p>银行黄金报价以 App 最终确认为准；这里用截图价建立本地跟踪基准，后续可替换为民生接口适配器。</p>
-          </div>
-          <span className="badge">{monitor.reference_symbol}</span>
-        </div>
-        <div className="quote-grid">
-          <article>
-            <strong>{monitor.reference_name}</strong>
-            <b>¥{monitor.reference_price.toFixed(2)}</b>
-            <span className={monitor.reference_change_pct < 0 ? "negative" : "positive"}>{pct(monitor.reference_change_pct)}</span>
-            <small>{monitor.reference_time}</small>
-          </article>
-          <article>
-            <strong>首笔试探</strong>
-            <b>{fmtCny(monitor.first_order_amount)}</b>
-            <span>{monitor.first_order_grams.toFixed(4)} 克</span>
-            <small>按当前价估算，成交以银行确认为准</small>
-          </article>
-          <article>
-            <strong>剩余弹药</strong>
-            <b>{fmtCny(monitor.reserve_cash)}</b>
-            <span className="positive">用于后续价位台阶</span>
-            <small>{monitor.source}</small>
-          </article>
         </div>
       </section>
     </div>

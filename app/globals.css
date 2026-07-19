@@ -1126,186 +1126,6 @@ button:disabled {
   font-size: 12px;
 }
 
-.gold-hero {
-  border-color: rgba(245, 195, 87, 0.28);
-  background:
-    linear-gradient(180deg, rgba(39, 32, 15, 0.5), rgba(9, 16, 25, 0.96)),
-    linear-gradient(180deg, rgba(14, 21, 32, 0.96), rgba(9, 16, 25, 0.96));
-}
-
-.gold-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-  gap: 14px;
-}
-
-.gold-position,
-.gold-advice {
-  min-height: 220px;
-  padding: 18px;
-  border: 1px solid rgba(245, 195, 87, 0.24);
-  border-radius: 7px;
-  background: rgba(7, 14, 22, 0.62);
-}
-
-.gold-position > span,
-.gold-advice > span {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.gold-position > strong {
-  display: block;
-  margin: 12px 0 18px;
-  color: var(--amber);
-  font-size: 34px;
-  line-height: 1;
-}
-
-.gold-position dl {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.gold-position dl div {
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: rgba(255,255,255,0.02);
-}
-
-.gold-position dd {
-  margin-top: 6px;
-  color: #f2d58a;
-}
-
-.gold-advice strong {
-  display: block;
-  margin-top: 12px;
-  color: var(--green);
-  font-size: 28px;
-}
-
-.gold-advice p {
-  margin-top: 14px;
-  color: #c3ced9;
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-.gold-advice em {
-  display: inline-block;
-  margin-top: 16px;
-  padding: 7px 10px;
-  border-radius: 7px;
-  background: rgba(24, 210, 176, 0.1);
-}
-
-.gold-trend {
-  position: relative;
-  min-height: 300px;
-  padding: 16px;
-  border: 1px solid rgba(245, 195, 87, 0.22);
-  border-radius: 7px;
-  background:
-    linear-gradient(180deg, rgba(245, 195, 87, 0.08), rgba(7, 14, 22, 0.74)),
-    #07101a;
-}
-
-.gold-trend svg {
-  display: block;
-  width: 100%;
-  height: 268px;
-}
-
-.gold-trend .trend-grid {
-  stroke: rgba(255,255,255,0.08);
-  stroke-width: 1;
-}
-
-.gold-trend .trend-axis {
-  stroke: rgba(245, 195, 87, 0.22);
-  stroke-width: 1;
-}
-
-.gold-trend .trend-line {
-  fill: none;
-  stroke: #d6a836;
-  stroke-width: 3;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  filter: drop-shadow(0 0 10px rgba(245, 195, 87, 0.22));
-}
-
-.gold-trend .trend-dot {
-  fill: #f5c357;
-  opacity: 0;
-  stroke: #2b1c04;
-  stroke-width: 2;
-  transition: opacity 120ms ease, stroke-width 120ms ease, fill 120ms ease;
-}
-
-.gold-trend .trend-hit {
-  fill: transparent;
-  stroke: transparent;
-  cursor: crosshair;
-}
-
-.gold-trend .trend-point:hover .trend-dot {
-  fill: #fff1b8;
-  opacity: 1;
-  stroke: #f5c357;
-  stroke-width: 3;
-}
-
-.trend-y-label,
-.trend-x-label {
-  fill: #8d98a5;
-  font-size: 12px;
-}
-
-.trend-x-label {
-  text-anchor: middle;
-}
-
-.trend-empty-label {
-  fill: #8d98a5;
-  font-size: 14px;
-  text-anchor: middle;
-}
-
-.trend-point-tooltip-svg {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease;
-}
-
-.trend-point:hover .trend-point-tooltip-svg {
-  opacity: 1;
-}
-
-.trend-point-tooltip-svg rect {
-  fill: rgba(5, 8, 13, 0.94);
-  stroke: rgba(245, 195, 87, 0.38);
-}
-
-.trend-point-tooltip-svg text {
-  fill: #f8e6ae;
-  font-size: 12px;
-}
-
-.trend-point-tooltip-svg text + text {
-  fill: var(--green);
-}
-
-.gold-trade-form {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
-  gap: 12px;
-  align-items: end;
-}
-
 .offline-trade-form {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1314,19 +1134,9 @@ button:disabled {
   margin-bottom: 16px;
 }
 
-.gold-trade-form label {
-  display: grid;
-  gap: 7px;
-}
-
 .offline-trade-form label {
   display: grid;
   gap: 7px;
-}
-
-.gold-trade-form label span {
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .offline-trade-form label span {
@@ -1334,8 +1144,6 @@ button:disabled {
   font-size: 12px;
 }
 
-.gold-trade-form input,
-.gold-trade-form select,
 .offline-trade-form input,
 .offline-trade-form select {
   width: 100%;
@@ -1347,73 +1155,13 @@ button:disabled {
   padding: 0 12px;
 }
 
-.gold-trade-form button,
 .offline-trade-form button {
   min-height: 42px;
   white-space: nowrap;
 }
 
-.gold-trade-form .wide-input,
 .offline-trade-form .wide-input {
   grid-column: span 2;
-}
-
-.gold-trade-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.gold-trade-summary div,
-.gold-trade-list article {
-  border: 1px solid rgba(245, 195, 87, 0.16);
-  border-radius: 8px;
-  background: rgba(245, 195, 87, 0.05);
-  padding: 12px;
-}
-
-.gold-trade-summary span,
-.gold-trade-list span {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.gold-trade-summary strong,
-.gold-trade-list b {
-  display: block;
-  margin-top: 4px;
-  color: var(--amber);
-}
-
-.gold-trade-list {
-  display: grid;
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.gold-trade-list article {
-  display: grid;
-  grid-template-columns: 1.2fr 0.7fr 1fr auto;
-  gap: 12px;
-  align-items: center;
-}
-
-.gold-trade-list article strong {
-  display: block;
-}
-
-.gold-trade-list article button {
-  min-height: 34px;
-  padding: 0 12px;
-  border-color: rgba(255, 91, 129, 0.4);
-  color: #ff9cb4;
-  background: rgba(255, 91, 129, 0.08);
-}
-
-.gold-trade-list p {
-  color: var(--muted);
-  margin: 0;
 }
 
 .allocation-summary {
@@ -1524,12 +1272,7 @@ select, input {
   .broker-grid { grid-template-columns: 1fr; }
   .source-grid, .quote-grid, .advice-grid, .execution-plan-grid, .account-balance-grid, .deck-summary, .deck-plan-grid { grid-template-columns: 1fr; }
   .execution-panel { grid-template-columns: 1fr; }
-  .gold-layout { grid-template-columns: 1fr; }
-  .gold-trade-form,
-  .offline-trade-form,
-  .gold-trade-summary,
-  .gold-trade-list article { grid-template-columns: 1fr; }
-  .gold-trade-form .wide-input,
+  .offline-trade-form { grid-template-columns: 1fr; }
   .offline-trade-form .wide-input { grid-column: span 1; }
 }
 
@@ -1541,6 +1284,5 @@ select, input {
   .strategy-card { grid-column: 1; }
   .flow, .analysis-form, .add-stock-row { grid-template-columns: 1fr; }
   .allocation-summary { flex-direction: column; }
-  .gold-position dl { grid-template-columns: 1fr; }
   table { display: block; overflow-x: auto; white-space: nowrap; }
 }
