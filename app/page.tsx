@@ -25,11 +25,8 @@ const USMART_SCREENSHOT_PATH =
   "/Users/brian/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_5oxgvzo5wkcv21_448a/temp/RWTemp/2026-07/b3cb3351d259bd6f77573a1d380b26e0.jpg";
 const ZA_SCREENSHOT_PATH =
   "/Users/brian/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_5oxgvzo5wkcv21_448a/temp/RWTemp/2026-07/4ce6a65a5e65b7986b40f0da36549bc8.jpg";
-const APP_PASSWORD_STORAGE_KEY = "us-stock-cockpit-password";
-
-function hasStoredAppPassword() {
-  return typeof window !== "undefined" && Boolean(window.localStorage.getItem(APP_PASSWORD_STORAGE_KEY));
-}
+const LEGACY_APP_PASSWORD_STORAGE_KEY = "us-stock-cockpit-password";
+const LEGACY_APP_USERNAME_STORAGE_KEY = "us-stock-cockpit-username";
 
 type DashboardSummary = {
   account_total: number;
@@ -78,6 +75,26 @@ type WatchlistItem = {
   signal_reason: string;
   model_score: number;
   model_reason: string;
+  watch_score: number;
+  watch_label: string;
+  watch_reason: string;
+  entry_low_price: number;
+  entry_high_price: number;
+  chase_limit_price: number;
+  stop_loss_price: number;
+  take_profit_price: number;
+  max_loss_amount: number;
+  quote_source: string;
+  quote_updated_at: string;
+  data_status: string;
+  volume_score: number;
+  ma5: number;
+  ma20: number;
+  distance_to_20d_high_pct: number;
+  distance_to_20d_low_pct: number;
+  atr20: number;
+  relative_volume: number;
+  vwap_hint: number;
 };
 
 type DisciplineEvent = {
@@ -225,6 +242,9 @@ type TradePlanItem = {
   ticker: string;
   name: string;
   broker: string;
+  account_name: string;
+  account_total: number;
+  available_cash: number;
   signal: string;
   model_score: number;
   action: string;
@@ -238,6 +258,10 @@ type TradePlanItem = {
   suggested_qty: number;
   stop_loss_price: number;
   take_profit_price: number;
+  entry_low_price: number;
+  entry_high_price: number;
+  chase_limit_price: number;
+  max_loss_amount: number;
   confidence: number;
   reason: string;
   blockers: string[];
@@ -255,10 +279,18 @@ type CandidateStock = {
   data_quality: number;
   signal: string;
   reference_source: string;
+  liquidity_score: number;
+  dollar_volume: number;
+  market_cap: number;
+  exchange: string;
+  source_updated_at: string;
+  data_status: string;
 };
 
 type AllocationSuggestion = {
   ticker: string;
+  broker: string;
+  account_name: string;
   current_weight: number;
   target_weight: number;
   action: string;
@@ -293,6 +325,31 @@ type ModelValidationItem = {
   tuning_note: string;
 };
 
+type DisciplineNotification = {
+  id: string;
+  title: string;
+  detail: string;
+  severity: "info" | "warn" | "risk";
+  created_at: string;
+};
+
+type DataAssetSummary = {
+  name: string;
+  count: number;
+  latest: string;
+  status: string;
+};
+
+type PostMarketReview = {
+  as_of: string;
+  snapshot_source: string;
+  watchlist_count: number;
+  candidate_count: number;
+  trade_actions: number;
+  risk_items: string[];
+  next_day_focus: string[];
+};
+
 type BacktestResult = {
   strategy_id: string;
   ticker: string;
@@ -304,6 +361,12 @@ type BacktestResult = {
   trades: number;
   benchmark_return: number;
   records: { date: string; equity: number; benchmark: number }[];
+};
+
+type SubmitFeedback = {
+  tone: "success" | "error" | "info";
+  title: string;
+  detail: string;
 };
 
 type AppData = {
@@ -322,6 +385,9 @@ type AppData = {
   tradePlan: TradePlanItem[];
   candidates: CandidateStock[];
   allocation: PortfolioOptimization | null;
+  notifications: DisciplineNotification[];
+  dataAssets: DataAssetSummary[];
+  dailyReview: PostMarketReview | null;
 };
 
 const nav = [
@@ -371,7 +437,6 @@ function defaultExecutionTime() {
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
-  const appPassword = typeof window === "undefined" ? "" : window.localStorage.getItem(APP_PASSWORD_STORAGE_KEY) || "";
   const controller = timeoutMs ? new AbortController() : null;
   const timeout = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
   let response: Response;
@@ -381,10 +446,10 @@ async function fetchJson<T>(path: string, init?: RequestInit, timeoutMs?: number
       signal: controller?.signal || init?.signal,
       headers: {
         "Content-Type": "application/json",
-        ...(appPassword ? { "X-App-Password": appPassword } : {}),
         ...(init?.headers || {})
       },
-      cache: "no-store"
+      cache: "no-store",
+      credentials: "same-origin"
     });
     if (!response.ok) {
       let message = `${path} ${response.status}`;
@@ -395,7 +460,7 @@ async function fetchJson<T>(path: string, init?: RequestInit, timeoutMs?: number
         // Keep the HTTP fallback when the backend did not return JSON.
       }
       if (response.status === 401) {
-        message = "需要访问密码";
+        message = "需要登录门户";
       }
       throw new Error(message);
     }
@@ -427,7 +492,10 @@ export default function Home() {
     accountBalances: [],
     tradePlan: [],
     candidates: [],
-    allocation: null
+    allocation: null,
+    notifications: [],
+    dataAssets: [],
+    dailyReview: null
   });
   const [newTicker, setNewTicker] = useState("");
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
@@ -437,19 +505,27 @@ export default function Home() {
   const [analysisType, setAnalysisType] = useState("offline");
   const [preparedOrder, setPreparedOrder] = useState<PreparedOrder | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [loading, setLoading] = useState(() => hasStoredAppPassword());
+  const [loading, setLoading] = useState(true);
   const [validatingModels, setValidatingModels] = useState(false);
   const [notice, setNotice] = useState("");
-  const [authRequired, setAuthRequired] = useState(() => !hasStoredAppPassword());
-  const [passwordInput, setPasswordInput] = useState("");
+  const [submitFeedback, setSubmitFeedback] = useState<SubmitFeedback | null>(null);
   const [marketSession, setMarketSession] = useState(() => getUSMarketSession());
   const loadingRef = useRef(false);
+
+  function showFeedback(tone: SubmitFeedback["tone"], title: string, detail: string) {
+    setNotice(detail);
+    setSubmitFeedback({ tone, title, detail });
+  }
+
+  function showOperationError(error: unknown, title: string, fallback: string) {
+    showFeedback("error", title, error instanceof Error ? error.message : fallback);
+  }
 
   const load = useCallback(async () => {
     if (loadingRef.current) return;
     loadingRef.current = true;
     try {
-      const [summary, strategies, events, orders, risk, brokers, execution, sources, holdings, accountBalances, allocation] = await Promise.all([
+      const [summary, strategies, events, orders, risk, brokers, execution, sources, holdings, accountBalances, allocation, notifications, dataAssets, dailyReview] = await Promise.all([
         fetchJson<DashboardSummary>("/dashboard/summary"),
         fetchJson<StrategyModel[]>("/strategies"),
         fetchJson<DisciplineEvent[]>("/discipline/events"),
@@ -460,9 +536,12 @@ export default function Home() {
         fetchJson<DataSourceStatus[]>("/data-sources/status"),
         fetchJson<Holding[]>("/portfolio/holdings"),
         fetchJson<AccountBalance[]>("/portfolio/account-balances"),
-        fetchJson<PortfolioOptimization>("/portfolio/optimization")
+        fetchJson<PortfolioOptimization>("/portfolio/optimization"),
+        fetchJson<DisciplineNotification[]>("/notifications"),
+        fetchJson<DataAssetSummary[]>("/data-assets/summary"),
+        fetchJson<PostMarketReview>("/daily-review")
       ]);
-      setData((current) => ({ ...current, summary, strategies, events, orders, risk, brokers, execution, sources, holdings, accountBalances, allocation }));
+      setData((current) => ({ ...current, summary, strategies, events, orders, risk, brokers, execution, sources, holdings, accountBalances, allocation, notifications, dataAssets, dailyReview }));
       setLoading(false);
       fetchJson<WatchlistItem[]>("/watchlist")
         .then((watchlist) => setData((current) => ({ ...current, watchlist })))
@@ -482,21 +561,17 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (authRequired) {
-      setLoading(false);
-      return;
-    }
+    window.localStorage.removeItem(LEGACY_APP_USERNAME_STORAGE_KEY);
+    window.localStorage.removeItem(LEGACY_APP_PASSWORD_STORAGE_KEY);
     load().catch((error) => {
       setLoading(false);
-      if (error instanceof Error && error.message === "需要访问密码") {
-        window.localStorage.removeItem(APP_PASSWORD_STORAGE_KEY);
-        setAuthRequired(true);
-        setNotice("请输入访问密码。");
+      if (error instanceof Error && error.message === "需要登录门户") {
+        window.location.assign("/?returnTo=/usstock");
         return;
       }
       setNotice("后端暂未连接，正在显示前端骨架。");
     });
-  }, [authRequired, load]);
+  }, [load]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setMarketSession(getUSMarketSession()), 30_000);
@@ -504,7 +579,6 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (authRequired) return undefined;
     const refreshSeconds = marketSession.isOpen ? 60 : 0;
     if (!refreshSeconds) return undefined;
     load().catch(() => setNotice("自动刷新失败，正在保留最近一次数据。"));
@@ -512,12 +586,11 @@ export default function Home() {
       load().catch(() => setNotice("自动刷新失败，正在保留最近一次数据。"));
     }, refreshSeconds * 1000);
     return () => window.clearInterval(timer);
-  }, [authRequired, load, marketSession.isOpen]);
+  }, [load, marketSession.isOpen]);
 
   useEffect(() => {
-    if (authRequired) return;
     runBacktest().catch(() => undefined);
-  }, [authRequired]);
+  }, []);
 
   const bestStrategy = useMemo(
     () => data.strategies.find((strategy) => strategy.id === selectedStrategy) || data.strategies[0],
@@ -539,30 +612,40 @@ export default function Home() {
       setNotice("");
     } catch (error) {
       setBacktest(null);
-      setNotice(error instanceof Error ? error.message : "缺少真实历史数据，无法回测。");
+      showOperationError(error, "回测失败", "缺少真实历史数据，无法回测。");
     }
   }
 
   async function toggleAutomation(paused: boolean) {
-    await fetchJson(paused ? "/automation/resume" : "/automation/pause", { method: "POST" });
-    await load();
+    try {
+      await fetchJson(paused ? "/automation/resume" : "/automation/pause", { method: "POST" });
+      await load();
+      showFeedback("success", "状态已更新", paused ? "已恢复自动执行监控。" : "已暂停自动执行监控。");
+    } catch (error) {
+      showOperationError(error, "状态更新失败", "自动执行状态更新失败，请稍后重试。");
+    }
   }
 
   async function previewUsmartOrder() {
-    const result = await fetchJson<PreparedOrder>("/orders/preview?target=usmart-paper", {
-      method: "POST",
-      body: JSON.stringify({
-        ticker: selectedTicker,
-        side: "BUY",
-        qty: 1,
-        order_type: "LMT",
-        limit_price: defaultPriceForTicker(selectedTicker),
-        strategy_id: selectedStrategy,
-        dry_run: false
-      })
-    });
-    setPreparedOrder(result);
-    setActive("dashboard");
+    try {
+      const result = await fetchJson<PreparedOrder>("/orders/preview?target=usmart-paper", {
+        method: "POST",
+        body: JSON.stringify({
+          ticker: selectedTicker,
+          side: "BUY",
+          qty: 1,
+          order_type: "LMT",
+          limit_price: defaultPriceForTicker(selectedTicker),
+          strategy_id: selectedStrategy,
+          dry_run: false
+        })
+      });
+      setPreparedOrder(result);
+      setActive("dashboard");
+      showFeedback("success", "预览已生成", `${selectedTicker} 的 uSMART 订单预览已生成。`);
+    } catch (error) {
+      showOperationError(error, "预览失败", "订单预览失败，请稍后重试。");
+    }
   }
 
   async function recordZaManualExecution() {
@@ -582,56 +665,108 @@ export default function Home() {
     const qty = Number(form.qty);
     const price = Number(form.price);
     if (!ticker || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price) || price <= 0) {
-      setNotice("请填写有效的股票代码、数量和成交价。");
+      showFeedback("error", "提交失败", "请填写有效的股票代码、数量和成交价。");
+      throw new Error("请填写有效的股票代码、数量和成交价。");
+    }
+    try {
+      await fetchJson<Order>("/manual-executions", {
+        method: "POST",
+        body: JSON.stringify({
+          broker: form.broker,
+          ticker,
+          side: form.side,
+          qty,
+          price,
+          executed_at: form.executed_at || defaultExecutionTime(),
+          note: form.note
+        })
+      });
+      await load();
+      showFeedback("success", "线下交易已提交", `已记录 ${ticker} ${form.side === "BUY" ? "买入" : "卖出"} ${qty} 股，并刷新本地持仓。`);
+    } catch (error) {
+      showOperationError(error, "提交失败", "线下交易提交失败，请稍后重试。");
+      throw error;
+    }
+  }
+
+  async function updateAccountCash(broker: AccountBalance["broker"], availableCash: number) {
+    if (!Number.isFinite(availableCash) || availableCash < 0) {
+      showFeedback("error", "保存失败", "请填写有效的账户可用现金。");
+      throw new Error("请填写有效的账户可用现金。");
+    }
+    try {
+      await fetchJson<AccountBalance>(`/portfolio/account-balances/${encodeURIComponent(broker)}`, {
+        method: "POST",
+        body: JSON.stringify({ available_cash: availableCash, note: "股票池手动设置" })
+      });
+      await load();
+      showFeedback("success", "现金已保存", `已更新 ${broker} 可用现金 ${fmtMoney(availableCash)}。`);
+    } catch (error) {
+      showOperationError(error, "保存失败", "账户可用现金保存失败，请稍后重试。");
+      throw error;
+    }
+  }
+
+  async function deleteManualExecution(order: Order) {
+    if (order.order_type !== "MANUAL") {
+      showFeedback("error", "撤回失败", "只能删除线下手工交易记录。");
       return;
     }
-    await fetchJson<Order>("/manual-executions", {
-      method: "POST",
-      body: JSON.stringify({
-        broker: form.broker,
-        ticker,
-        side: form.side,
-        qty,
-        price,
-        executed_at: form.executed_at || defaultExecutionTime(),
-        note: form.note
-      })
-    });
-    await load();
-    setNotice(`已记录 ${ticker} ${form.side === "BUY" ? "买入" : "卖出"} ${qty} 股线下交易，并更新本地持仓。`);
+    const confirmed = window.confirm(`确认撤回 ${order.ticker} ${order.side} ${order.qty} 股这条线下交易记录吗？系统会同步回滚本地现金和持仓。`);
+    if (!confirmed) return;
+    try {
+      const result = await fetchJson<{ deleted: string; holding_note: string; events_removed: string }>(`/manual-executions/${encodeURIComponent(order.id)}`, { method: "DELETE" });
+      await load();
+      showFeedback("success", "线下交易已撤回", `已撤回 ${result.deleted}。${result.holding_note}`);
+    } catch (error) {
+      showOperationError(error, "撤回失败", "线下交易撤回失败，请稍后重试。");
+    }
   }
 
   async function importUsmartScreenshot() {
-    const result = await fetchJson<USmartScreenshotResult>("/imports/usmart-screenshot", {
-      method: "POST",
-      body: JSON.stringify({
-        image_path: USMART_SCREENSHOT_PATH,
-        as_of: "07/16 14:02"
-      })
-    });
-    await load();
-    setActive("discipline");
-    setNotice(`已从 uSMART 截图导入 ${result.imported_holdings} 条持仓，净资产 ${fmtMoney(result.net_asset)}。`);
+    try {
+      const result = await fetchJson<USmartScreenshotResult>("/imports/usmart-screenshot", {
+        method: "POST",
+        body: JSON.stringify({
+          image_path: USMART_SCREENSHOT_PATH,
+          as_of: "07/16 14:02"
+        })
+      });
+      await load();
+      setActive("discipline");
+      showFeedback("success", "uSMART 导入成功", `已从 uSMART 截图导入 ${result.imported_holdings} 条持仓，净资产 ${fmtMoney(result.net_asset)}。`);
+    } catch (error) {
+      showOperationError(error, "uSMART 导入失败", "uSMART 截图导入失败，请检查图片路径或稍后重试。");
+    }
   }
 
   async function importZaScreenshot() {
-    const result = await fetchJson<ZABankScreenshotResult>("/imports/za-screenshot", {
-      method: "POST",
-      body: JSON.stringify({
-        image_path: ZA_SCREENSHOT_PATH,
-        as_of: "07/16 14:04"
-      })
-    });
-    await load();
-    setActive("discipline");
-    setNotice(`已从 ZA Bank 截图导入 ${result.imported_holdings} 条持仓。`);
+    try {
+      const result = await fetchJson<ZABankScreenshotResult>("/imports/za-screenshot", {
+        method: "POST",
+        body: JSON.stringify({
+          image_path: ZA_SCREENSHOT_PATH,
+          as_of: "07/16 14:04"
+        })
+      });
+      await load();
+      setActive("discipline");
+      showFeedback("success", "ZA Bank 导入成功", `已从 ZA Bank 截图导入 ${result.imported_holdings} 条持仓。`);
+    } catch (error) {
+      showOperationError(error, "ZA Bank 导入失败", "ZA Bank 截图导入失败，请检查图片路径或稍后重试。");
+    }
   }
 
   async function importPreviousClose() {
-    const result = await fetchJson<PreviousCloseImportResult>("/market/import-previous-close", { method: "POST" });
-    await load();
-    setNotice(`已导入 ${result.imported} 条上一交易日收盘价，账户估值 ${fmtMoney(result.account_total)}，持仓盈亏 ${fmtMoney(result.total_pnl)}。`);
-    return result;
+    try {
+      const result = await fetchJson<PreviousCloseImportResult>("/market/import-previous-close", { method: "POST" });
+      await load();
+      showFeedback("success", "昨收已导入", `已导入 ${result.imported} 条上一交易日收盘价，账户估值 ${fmtMoney(result.account_total)}，持仓盈亏 ${fmtMoney(result.total_pnl)}。`);
+      return result;
+    } catch (error) {
+      showOperationError(error, "昨收导入失败", "上一交易日收盘价导入失败，请稍后重试。");
+      throw error;
+    }
   }
 
   async function importPreviousCloseAndBacktest() {
@@ -650,16 +785,20 @@ export default function Home() {
       });
       setNewTicker("");
       await load();
-      setNotice(`${added.ticker} 已加入股票池，并已用最新可用行情更新趋势与信号。`);
+      showFeedback("success", "已加入股票池", `${added.ticker} 已加入股票池，并已用最新可用行情更新趋势与信号。`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "加入失败，请稍后重试。");
+      showOperationError(error, "加入失败", "加入失败，请稍后重试。");
     }
   }
 
   async function deleteWatchlistTicker(ticker: string) {
-    await fetchJson(`/watchlist/${encodeURIComponent(ticker)}`, { method: "DELETE" });
-    await load();
-    setNotice(`${ticker} 已从股票池删除。`);
+    try {
+      await fetchJson(`/watchlist/${encodeURIComponent(ticker)}`, { method: "DELETE" });
+      await load();
+      showFeedback("success", "已删除股票", `${ticker} 已从股票池删除。`);
+    } catch (error) {
+      showOperationError(error, "删除失败", `${ticker} 删除失败，请稍后重试。`);
+    }
   }
 
   async function validateModels() {
@@ -671,67 +810,30 @@ export default function Home() {
       setValidation(result);
       await load();
       const tested = result.reduce((total, item) => total + item.tested, 0);
-      setNotice(`已验证 ${result.length} 个策略模型、${tested} 个股票样本，模型分已更新到股票池和持仓建议。`);
+      showFeedback("success", "模型验证完成", `已验证 ${result.length} 个策略模型、${tested} 个股票样本，模型分已更新到股票池和持仓建议。`);
     } catch (error) {
-      setNotice(error instanceof Error ? `模型验证失败：${error.message}` : "模型验证失败，请稍后重试。");
+      showOperationError(error, "模型验证失败", "模型验证失败，请稍后重试。");
     } finally {
       setValidatingModels(false);
     }
   }
 
-  async function unlockApp(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const trimmed = passwordInput.trim();
-    if (!trimmed) {
-      setNotice("请输入访问密码。");
-      return;
-    }
-    window.localStorage.setItem(APP_PASSWORD_STORAGE_KEY, trimmed);
-    setAuthRequired(false);
-    setLoading(true);
+  async function createDailySnapshot() {
     try {
+      const result = await fetchJson<{ as_of: string; watchlist_count: number; candidate_count: number; trade_actions: number; saved: boolean }>("/daily-snapshot", { method: "POST" });
       await load();
-      setNotice("");
+      showFeedback("success", "快照已生成", `已生成今日快照：股票池 ${result.watchlist_count} 个，候选股 ${result.candidate_count} 个，动作 ${result.trade_actions} 个。`);
     } catch (error) {
-      window.localStorage.removeItem(APP_PASSWORD_STORAGE_KEY);
-      setAuthRequired(true);
-      setLoading(false);
-      setNotice(error instanceof Error ? error.message : "访问密码不正确。");
+      showOperationError(error, "快照生成失败", "今日快照生成失败，请稍后重试。");
     }
   }
 
-  function lockApp() {
-    window.localStorage.removeItem(APP_PASSWORD_STORAGE_KEY);
-    setPasswordInput("");
-    setAuthRequired(true);
-    setLoading(false);
-    setNotice("已锁定，请重新输入访问密码。");
-  }
-
-  if (authRequired) {
-    return (
-      <main className="login-shell">
-        <form className="login-panel" onSubmit={unlockApp}>
-          <div>
-            <span className="login-kicker">US STOCK COCKPIT</span>
-            <h1>美股驾驶舱</h1>
-            <p>输入访问密码后查看持仓、股票池和交易纪律。</p>
-          </div>
-          <label>
-            <span>访问密码</span>
-            <input
-              autoFocus
-              type="password"
-              value={passwordInput}
-              onChange={(event) => setPasswordInput(event.target.value)}
-              placeholder="请输入 APP_PASSWORD"
-            />
-          </label>
-          <button className="primary" type="submit">进入驾驶舱</button>
-          {notice && <small className="login-error">{notice}</small>}
-        </form>
-      </main>
-    );
+  async function logoutPortal() {
+    try {
+      await fetch("/logout", { method: "POST", credentials: "same-origin" });
+    } finally {
+      window.location.assign("/");
+    }
   }
 
   return (
@@ -771,7 +873,7 @@ export default function Home() {
             <div><dt>今日订单</dt><dd>{data.summary?.today_orders || "0 / 5"}</dd></div>
             <div><dt>全局风控</dt><dd>{data.summary?.global_risk || "正常"}</dd></div>
             <div><dt>数据源</dt><dd>{data.summary?.data_source || "本地记录"}</dd></div>
-            <div><dt>同步状态</dt><dd>{data.summary?.sync_status || "未登录"}</dd></div>
+            <div><dt>同步状态</dt><dd>{data.summary?.sync_status || "门户已认证"}</dd></div>
             <div><dt>本地保存</dt><dd>{data.summary?.local_saved_at || "07/16 14:04"}</dd></div>
           </dl>
           <button className="ghost">重置本地数据</button>
@@ -785,9 +887,9 @@ export default function Home() {
             <span className="pill local">本地纪律模式</span>
             <span className="pill">{marketSession.label}</span>
             <span className="pill">{marketSession.refreshLabel}</span>
-            <button className="sync" type="button" onClick={lockApp}>
+            <button className="sync" type="button" onClick={logoutPortal}>
               <LogOut size={15} />
-              锁定
+              退出门户
             </button>
             <button className="sync" onClick={() => data.summary && toggleAutomation(data.summary.automation_paused)}>
               {data.summary?.automation_paused ? <Play size={15} /> : <CirclePause size={15} />}
@@ -797,6 +899,15 @@ export default function Home() {
         </header>
 
         {notice && <div className="notice">{notice}</div>}
+        {submitFeedback && (
+          <div className={`submit-feedback ${submitFeedback.tone}`} role="status" aria-live="polite">
+            <div>
+              <strong>{submitFeedback.title}</strong>
+              <p>{submitFeedback.detail}</p>
+            </div>
+            <button type="button" onClick={() => setSubmitFeedback(null)}>关闭</button>
+          </div>
+        )}
         {loading ? <div className="loading">正在加载驾驶舱...</div> : null}
 
         {active === "dashboard" && data.summary && (
@@ -821,6 +932,9 @@ export default function Home() {
             tradePlan={data.tradePlan}
             candidates={data.candidates}
             allocation={data.allocation}
+            notifications={data.notifications}
+            dataAssets={data.dataAssets}
+            dailyReview={data.dailyReview}
             validation={validation}
             newTicker={newTicker}
             setNewTicker={setNewTicker}
@@ -829,7 +943,10 @@ export default function Home() {
             load={load}
             importPreviousClose={importPreviousClose}
             validateModels={validateModels}
+            createDailySnapshot={createDailySnapshot}
             validatingModels={validatingModels}
+            submitOfflineTrade={submitOfflineTrade}
+            updateAccountCash={updateAccountCash}
           />
         )}
         {active === "discipline" && (
@@ -840,6 +957,7 @@ export default function Home() {
             selectedTicker={selectedTicker}
             recordZaManualExecution={recordZaManualExecution}
             submitOfflineTrade={submitOfflineTrade}
+            deleteManualExecution={deleteManualExecution}
             importUsmartScreenshot={importUsmartScreenshot}
             importZaScreenshot={importZaScreenshot}
           />
@@ -1065,6 +1183,9 @@ function Watchlist({
   tradePlan,
   candidates,
   allocation,
+  notifications,
+  dataAssets,
+  dailyReview,
   validation,
   newTicker,
   setNewTicker,
@@ -1073,7 +1194,10 @@ function Watchlist({
   load,
   importPreviousClose,
   validateModels,
-  validatingModels
+  createDailySnapshot,
+  validatingModels,
+  submitOfflineTrade,
+  updateAccountCash
 }: {
   items: WatchlistItem[];
   quotes: MarketQuote[];
@@ -1082,6 +1206,9 @@ function Watchlist({
   tradePlan: TradePlanItem[];
   candidates: CandidateStock[];
   allocation: PortfolioOptimization | null;
+  notifications: DisciplineNotification[];
+  dataAssets: DataAssetSummary[];
+  dailyReview: PostMarketReview | null;
   validation: ModelValidationItem[];
   newTicker: string;
   setNewTicker: (value: string) => void;
@@ -1090,10 +1217,14 @@ function Watchlist({
   load: () => Promise<void>;
   importPreviousClose: () => Promise<PreviousCloseImportResult>;
   validateModels: () => Promise<void>;
+  createDailySnapshot: () => Promise<void>;
   validatingModels: boolean;
+  submitOfflineTrade: (form: OfflineTradeForm) => Promise<void>;
+  updateAccountCash: (broker: AccountBalance["broker"], availableCash: number) => Promise<void>;
 }) {
+  const [tradeDraft, setTradeDraft] = useState<OfflineTradeForm | null>(null);
+  const [cashDraft, setCashDraft] = useState<{ broker: AccountBalance["broker"]; value: string } | null>(null);
   const quoteMap = new Map(quotes.map((quote) => [quote.ticker, quote]));
-  const accountTotal = holdings.reduce((sum, holding) => sum + holding.market_value, 0);
   const cashBalance = accountBalances.reduce((sum, account) => sum + account.available_cash, 0);
   const accountEquity = accountBalances.reduce((sum, account) => sum + account.account_total, 0);
   const reserveCash = Math.max(accountEquity * 0.08, 0);
@@ -1113,16 +1244,64 @@ function Watchlist({
     : reducePlans.length
       ? "先减仓回收弹药"
       : "观察等待";
-  const holdingMap = new Map<string, { qty: number; cost: number; value: number; pnl: number; brokers: Set<string> }>();
+  const accountTotalByBroker = new Map(accountBalances.map((account) => [account.broker, account.account_total]));
+  const holdingMap = new Map<string, { value: number; brokers: Set<string>; rows: Holding[] }>();
   holdings.forEach((holding) => {
-    const current = holdingMap.get(holding.ticker) || { qty: 0, cost: 0, value: 0, pnl: 0, brokers: new Set<string>() };
-    current.qty += holding.qty;
-    current.cost += holding.avg_cost * holding.qty;
+    const current = holdingMap.get(holding.ticker) || { value: 0, brokers: new Set<string>(), rows: [] };
     current.value += holding.market_value;
-    current.pnl += holding.pnl;
     current.brokers.add(holding.broker);
+    current.rows.push(holding);
     holdingMap.set(holding.ticker, current);
   });
+  const sortedWatchlistItems = [...items].sort((left, right) => {
+    const leftHolding = holdingMap.get(left.ticker);
+    const rightHolding = holdingMap.get(right.ticker);
+    if (leftHolding && rightHolding) return rightHolding.value - leftHolding.value;
+    if (leftHolding) return -1;
+    if (rightHolding) return 1;
+    return 0;
+  });
+
+  function openTradeModal(item: WatchlistItem, side: OfflineTradeForm["side"] = "BUY", broker?: OfflineTradeForm["broker"]) {
+    const quote = quoteMap.get(item.ticker);
+    const plan = tradePlan.find((row) => row.ticker === item.ticker && (broker ? row.broker === broker : true));
+    const preferredBroker = (broker || plan?.broker || accountBalances[0]?.broker || "za-bank") as OfflineTradeForm["broker"];
+    const referencePrice = side === "BUY"
+      ? (plan?.entry_high_price || item.entry_high_price || quote?.price || plan?.reference_price || 0)
+      : (plan?.reference_price || quote?.price || item.take_profit_price || 0);
+    setTradeDraft({
+      broker: preferredBroker,
+      ticker: item.ticker,
+      side,
+      qty: "",
+      price: referencePrice ? String(roundMoney(referencePrice)) : "",
+      executed_at: defaultExecutionTime(),
+      note: "股票池中长线纪律记录"
+    });
+  }
+
+  async function handleTradeDraftSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!tradeDraft) return;
+    try {
+      await submitOfflineTrade(tradeDraft);
+      setTradeDraft(null);
+    } catch {
+      // Keep the modal open so the user can correct and resubmit.
+    }
+  }
+
+  async function handleCashDraftSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!cashDraft) return;
+    try {
+      await updateAccountCash(cashDraft.broker, Number(cashDraft.value));
+      setCashDraft(null);
+    } catch {
+      // Keep the modal open so the user can correct and resubmit.
+    }
+  }
+
   return (
     <div className="page-grid">
       <section className="panel full">
@@ -1137,7 +1316,33 @@ function Watchlist({
             <button onClick={validateModels} disabled={validatingModels}>
               {validatingModels ? "验证中..." : "验证模型"}
             </button>
+            <button onClick={createDailySnapshot}>生成今日快照</button>
           </div>
+        </div>
+        <div className="ops-insight-grid">
+          <article className="ops-insight-card">
+            <header><ShieldCheck size={16} /><strong>纪律通知</strong></header>
+            {notifications.slice(0, 3).map((item) => (
+              <p key={item.id} className={`ops-${item.severity}`}><b>{item.title}</b><span>{item.detail}</span></p>
+            ))}
+          </article>
+          <article className="ops-insight-card">
+            <header><Database size={16} /><strong>本地数据资产</strong></header>
+            {dataAssets.map((item) => (
+              <p key={item.name}><b>{item.name}</b><span>{item.count} 份 · {item.latest || item.status}</span></p>
+            ))}
+          </article>
+          <article className="ops-insight-card">
+            <header><Radar size={16} /><strong>盘后复盘</strong></header>
+            {dailyReview ? (
+              <>
+                <p><b>{dailyReview.snapshot_source}</b><span>{dailyReview.watchlist_count} 股 · {dailyReview.trade_actions} 个动作</span></p>
+                <p><b>明日重点</b><span>{dailyReview.next_day_focus[0] || "暂无强动作，继续观察。"}</span></p>
+              </>
+            ) : (
+              <p><b>暂无复盘</b><span>生成今日快照后会保留本地复盘依据。</span></p>
+            )}
+          </article>
         </div>
         <div className="account-balance-grid">
           {accountBalances.map((account) => (
@@ -1149,8 +1354,84 @@ function Watchlist({
                 <div><dt>持仓市值</dt><dd>{fmtMoney(account.holding_value)}</dd></div>
                 <div><dt>账户合计</dt><dd>{fmtMoney(account.account_total)}</dd></div>
               </dl>
+              <button type="button" onClick={() => setCashDraft({ broker: account.broker, value: String(account.available_cash) })}>调整现金</button>
             </article>
           ))}
+        </div>
+        <div className="watchlist-priority-grid">
+          <section className="decision-panel">
+            <div className="panel-head compact-head">
+              <div>
+                <h2>今日配舱策略</h2>
+                <p>按账户现金弹药、8% 现金垫、股票池信号和中长线目标仓位生成今日加仓/减仓建议。</p>
+              </div>
+              <span className="badge">{todayDeckAction}</span>
+            </div>
+            <div className="deck-summary">
+              <div><span>总弹药</span><strong>{fmtMoney(cashBalance)}</strong></div>
+              <div><span>现金垫</span><strong>{fmtMoney(reserveCash)}</strong></div>
+              <div><span>可动用</span><strong>{fmtMoney(deployableCash)}</strong></div>
+              <div><span>减仓可回收</span><strong>{fmtMoney(reduceCash)}</strong></div>
+            </div>
+            <div className="deck-plan-grid">
+              <article className="deck-plan-card buy">
+                <header>
+                  <strong>混合加仓</strong>
+                  <span>{mixedBuyPlans.length ? `${mixedBuyPlans.length} 个标的` : "暂无可执行买入"}</span>
+                </header>
+                {mixedBuyPlans.length ? (
+                  <div className="compact-table">
+                    {mixedBuyPlans.map((item) => (
+                      <div key={`deck-buy-${item.broker}-${item.ticker}`}>
+                        <span>{item.account_name || item.broker} · {item.ticker} · 买入 {item.entry_low_price && item.entry_high_price ? `${fmtMoney(item.entry_low_price)}-${fmtMoney(item.entry_high_price)}` : fmtMoney(item.reference_price)} · 追高线 {item.chase_limit_price ? fmtMoney(item.chase_limit_price) : "-"} · 止损 {fmtMoney(item.stop_loss_price)}</span>
+                        <b>{item.qty} 股</b>
+                        <em>{fmtMoney(item.budget)}</em>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p>当前没有同时满足现金垫、BUY 信号、无阻断条件的标的。先保留弹药，等待股票池信号转强。</p>
+                )}
+              </article>
+              <article className="deck-plan-card sell">
+                <header>
+                  <strong>减仓顺序</strong>
+                  <span>{reducePlans.length ? `${reducePlans.length} 个标的` : "暂无强制减仓"}</span>
+                </header>
+                {reducePlans.length ? (
+                  <div className="compact-table">
+                    {reducePlans.map((item) => (
+                      <div key={`deck-sell-${item.broker}-${item.ticker}`}>
+                        <span>{item.account_name || item.broker} · {item.ticker} · 卖出参考 {fmtMoney(item.reference_price)} · 风控止损 {fmtMoney(item.stop_loss_price)} · 反弹目标 {fmtMoney(item.take_profit_price)}</span>
+                        <b>{item.suggested_qty} 股</b>
+                        <em>{fmtMoney(Math.abs(item.delta_amount))}</em>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p>当前执行计划没有生成减仓动作。若需要补足弹药，优先人工检查高亏损、高集中度或模型分偏低的持仓。</p>
+                )}
+              </article>
+            </div>
+            {allocation && (
+              <div className="allocation-inline">
+                <div>
+                  <span>仓位优化依据</span>
+                  <strong>{allocation.cash_action}</strong>
+                  <small>账户 {fmtMoney(allocation.account_total)} · 当前现金 {fmtMoney(allocation.cash_balance)} · 目标现金 {fmtMoney(allocation.cash_target)}</small>
+                </div>
+                <div className="compact-table">
+                  {allocation.suggestions.slice(0, 4).map((item) => (
+                    <div key={`${item.broker}-${item.ticker}`}>
+                      <span>{item.account_name || item.broker} · {item.ticker} · 当前 {item.current_weight.toFixed(2)}% / 目标 {item.target_weight.toFixed(2)}%</span>
+                      <b>{item.action}</b>
+                      <em>{fmtMoney(item.amount)}</em>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
         </div>
         <div className="add-stock-row">
           <label>新增监控股票
@@ -1164,40 +1445,80 @@ function Watchlist({
         </div>
         <table className="watchlist-table">
           <thead>
-            <tr><th>股票</th><th>现价</th><th>涨跌</th><th>持仓</th><th>成本</th><th>持仓盈亏</th><th>仓位</th><th>PE</th><th>PEG</th><th>ROI</th><th>趋势</th><th>模型分</th><th>信号</th><th>信号依据</th><th>操作</th></tr>
+            <tr><th>股票</th><th>现价</th><th>涨跌</th><th>数据</th><th>持仓</th><th>成本</th><th>持仓盈亏</th><th>仓位</th><th>趋势</th><th>中长线策略</th><th>纪律价</th><th>操作</th></tr>
           </thead>
           <tbody>
-            {items.map((item) => {
+            {sortedWatchlistItems.map((item) => {
               const quote = quoteMap.get(item.ticker);
               const holding = holdingMap.get(item.ticker);
-              const avgCost = holding && holding.qty ? holding.cost / holding.qty : 0;
-              const pnlPct = holding && holding.cost ? (holding.pnl / holding.cost) * 100 : 0;
-              const weight = holding && accountTotal ? (holding.value / accountTotal) * 100 : 0;
               const hasModelValidation = item.model_reason && item.model_reason !== "尚未验证模型";
               return (
                 <tr key={item.ticker}>
                   <td><b>{item.ticker}</b><span>{holding ? `${Array.from(holding.brokers).join(" / ")} · ${item.name}` : item.name}</span></td>
                   <td>{quote ? fmtMoney(quote.price) : "-"}</td>
                   <td className={quote && quote.pct_change < 0 ? "negative" : "positive"}>{quote ? pct(quote.pct_change) : "-"}</td>
-                  <td>{holding ? holding.qty.toFixed(holding.qty < 1 ? 4 : 2) : "-"}</td>
-                  <td>{holding ? fmtMoney(avgCost) : "-"}</td>
-                  <td className={holding && holding.pnl < 0 ? "negative" : "positive"}>{holding ? `${fmtMoney(holding.pnl)} / ${pct(pnlPct)}` : "-"}</td>
-                  <td>{holding ? pct(weight) : "-"}</td>
-                  <td>{item.pe}</td>
-                  <td>{item.peg}</td>
-                  <td>{pct(item.roi)}</td>
-                  <td>{item.trend}</td>
-                  <td className="model-cell">
-                    {hasModelValidation ? item.model_score : "-"}
-                    <span>{item.model_reason || "点击验证模型后生成"}</span>
+                  <td className="source-cell">
+                    <b>{item.data_status || quote?.source || "-"}</b>
+                    <span>{item.quote_updated_at || quote?.updated_at || "-"}</span>
                   </td>
-                  <td><em>{holding ? `${item.signal} · 持仓纪律` : item.signal}</em></td>
-                  <td><span>{item.signal_reason || "-"}</span></td>
                   <td>
                     {holding ? (
-                      <span>持仓中</span>
+                      <div className="account-holding-list">
+                        {holding.rows.map((row) => <span key={`${row.broker}-qty`}>{row.broker} · {row.qty.toFixed(row.qty < 1 ? 4 : 2)}</span>)}
+                      </div>
+                    ) : "-"}
+                  </td>
+                  <td>
+                    {holding ? (
+                      <div className="account-holding-list">
+                        {holding.rows.map((row) => <span key={`${row.broker}-cost`}>{row.broker} · {fmtMoney(row.avg_cost)}</span>)}
+                      </div>
+                    ) : "-"}
+                  </td>
+                  <td>
+                    {holding ? (
+                      <div className="account-holding-list">
+                        {holding.rows.map((row) => {
+                          const cost = row.avg_cost * row.qty;
+                          const pnlPct = cost ? (row.pnl / cost) * 100 : 0;
+                          return <span key={`${row.broker}-pnl`} className={row.pnl < 0 ? "negative" : "positive"}>{row.broker} · {fmtMoney(row.pnl)} / {pct(pnlPct)}</span>;
+                        })}
+                      </div>
+                    ) : "-"}
+                  </td>
+                  <td>
+                    {holding ? (
+                      <div className="account-holding-list">
+                        {holding.rows.map((row) => {
+                          const total = accountTotalByBroker.get(row.broker) || row.market_value;
+                          return <span key={`${row.broker}-weight`}>{row.broker} · {pct((row.market_value / Math.max(total, 1)) * 100)}</span>;
+                        })}
+                      </div>
+                    ) : "-"}
+                  </td>
+                  <td>{item.trend}</td>
+                  <td className="model-cell">
+                    {item.watch_score || "-"}
+                    <span>{item.watch_label || "-"}</span>
+                    <span>{holding ? `${item.signal} · 分账户纪律` : item.signal}</span>
+                    <span>{hasModelValidation ? `模型分 ${item.model_score} · ${item.model_reason}` : item.signal_reason || item.watch_reason || "点击验证模型后生成"}</span>
+                    <span>{item.ma5 && item.ma20 ? `MA5/20 ${item.ma5}/${item.ma20} · ATR ${item.atr20 || "-"}` : "日线缓存不足"}</span>
+                  </td>
+                  <td className="source-cell">
+                    <b>{item.entry_low_price && item.entry_high_price ? `${fmtMoney(item.entry_low_price)}-${fmtMoney(item.entry_high_price)}` : "不追"}</b>
+                    <span>追高 {item.chase_limit_price ? fmtMoney(item.chase_limit_price) : "-"} · 止损 {item.stop_loss_price ? fmtMoney(item.stop_loss_price) : "-"}</span>
+                  </td>
+                  <td>
+                    {holding ? (
+                      <div className="row-action-stack">
+                        <span>持仓中</span>
+                        <button type="button" onClick={() => openTradeModal(item, "BUY")}>记录交易</button>
+                      </div>
                     ) : (
-                      <button onClick={() => deleteWatchlistTicker(item.ticker)}>删除</button>
+                      <div className="row-action-stack">
+                        <button type="button" onClick={() => openTradeModal(item, "BUY")}>记录交易</button>
+                        <button onClick={() => deleteWatchlistTicker(item.ticker)}>删除</button>
+                      </div>
                     )}
                   </td>
                 </tr>
@@ -1217,19 +1538,23 @@ function Watchlist({
         </div>
         <div className="execution-plan-grid">
           {tradePlan.map((item) => (
-            <article key={item.ticker} className={`execution-plan-card ${item.side.toLowerCase()}`}>
+            <article key={`${item.broker}-${item.ticker}`} className={`execution-plan-card ${item.side.toLowerCase()}`}>
               <header>
                 <strong>{item.ticker}</strong>
                 <b>{item.action}</b>
-                <span>{item.signal} · 模型分 {item.model_score || "-"}</span>
+                <span>{item.account_name || item.broker} · {item.signal} · 模型分 {item.model_score || "-"}</span>
               </header>
               <dl>
                 <div><dt>方向</dt><dd>{item.side === "NONE" ? "不下单" : item.side}</dd></div>
                 <div><dt>建议股数</dt><dd>{item.suggested_qty}</dd></div>
                 <div><dt>金额差</dt><dd>{fmtMoney(item.delta_amount)}</dd></div>
                 <div><dt>参考价</dt><dd>{fmtMoney(item.reference_price)}</dd></div>
-                <div><dt>仓位</dt><dd>{item.current_weight.toFixed(2)}% → {item.target_weight.toFixed(2)}%</dd></div>
+                <div><dt>账户现金</dt><dd>{fmtMoney(item.available_cash)}</dd></div>
+                <div><dt>账户仓位</dt><dd>{item.current_weight.toFixed(2)}% → {item.target_weight.toFixed(2)}%</dd></div>
+                <div><dt>买入区间</dt><dd>{item.entry_low_price && item.entry_high_price ? `${fmtMoney(item.entry_low_price)}-${fmtMoney(item.entry_high_price)}` : "不追"}</dd></div>
+                <div><dt>追高线</dt><dd>{item.chase_limit_price ? fmtMoney(item.chase_limit_price) : "-"}</dd></div>
                 <div><dt>止损/止盈</dt><dd>{fmtMoney(item.stop_loss_price)} / {fmtMoney(item.take_profit_price)}</dd></div>
+                <div><dt>最大亏损</dt><dd>{item.max_loss_amount ? fmtMoney(item.max_loss_amount) : "-"}</dd></div>
               </dl>
               <p>{item.reason}</p>
               {item.blockers.length > 0 && <span className="blocker">{item.blockers.join("；")}</span>}
@@ -1241,64 +1566,8 @@ function Watchlist({
       <section className="panel wide">
         <div className="panel-head">
           <div>
-            <h2>今日配舱</h2>
-            <p>按账户现金弹药、现金垫、股票池信号和执行策略生成今日混合加仓与减仓顺序。</p>
-          </div>
-          <span className="badge">{todayDeckAction}</span>
-        </div>
-        <div className="deck-summary">
-          <div><span>总弹药</span><strong>{fmtMoney(cashBalance)}</strong></div>
-          <div><span>现金垫</span><strong>{fmtMoney(reserveCash)}</strong></div>
-          <div><span>可动用</span><strong>{fmtMoney(deployableCash)}</strong></div>
-          <div><span>减仓可回收</span><strong>{fmtMoney(reduceCash)}</strong></div>
-        </div>
-        <div className="deck-plan-grid">
-          <article className="deck-plan-card buy">
-            <header>
-              <strong>混合加仓</strong>
-              <span>{mixedBuyPlans.length ? `${mixedBuyPlans.length} 个标的` : "暂无可执行买入"}</span>
-            </header>
-            {mixedBuyPlans.length ? (
-              <div className="compact-table">
-                {mixedBuyPlans.map((item) => (
-                  <div key={`deck-buy-${item.ticker}`}>
-                    <span>{item.ticker} · 买入参考 {fmtMoney(item.reference_price)} · 止损 {fmtMoney(item.stop_loss_price)} · 止盈 {fmtMoney(item.take_profit_price)}</span>
-                    <b>{item.qty} 股</b>
-                    <em>{fmtMoney(item.budget)}</em>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p>当前没有同时满足现金垫、BUY 信号、无阻断条件的标的。先保留弹药，等待股票池信号转强。</p>
-            )}
-          </article>
-          <article className="deck-plan-card sell">
-            <header>
-              <strong>减仓顺序</strong>
-              <span>{reducePlans.length ? `${reducePlans.length} 个标的` : "暂无强制减仓"}</span>
-            </header>
-            {reducePlans.length ? (
-              <div className="compact-table">
-                {reducePlans.map((item) => (
-                  <div key={`deck-sell-${item.ticker}`}>
-                    <span>{item.ticker} · 卖出参考 {fmtMoney(item.reference_price)} · 止损 {fmtMoney(item.stop_loss_price)} · 止盈 {fmtMoney(item.take_profit_price)}</span>
-                    <b>{item.suggested_qty} 股</b>
-                    <em>{fmtMoney(Math.abs(item.delta_amount))}</em>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p>当前执行计划没有生成减仓动作。若需要补足弹药，优先人工检查高亏损、高集中度或模型分偏低的持仓。</p>
-            )}
-          </article>
-        </div>
-      </section>
-
-      <section className="panel wide">
-        <div className="panel-head">
-          <div>
-            <h2>候选股发现</h2>
-            <p>用于寻找适合加入监控的标的，加入后进入同一套行情、信号和回测流程。</p>
+            <h2>中长期候选股发现</h2>
+            <p>用于寻找值得长期跟踪的标的，先看质量、估值、趋势和真实数据质量，再决定是否加入股票池。</p>
           </div>
           <span className="badge">{candidates.length} 个候选</span>
         </div>
@@ -1308,40 +1577,14 @@ function Watchlist({
               <strong>{candidate.ticker} · {candidate.name}</strong>
               <b>{candidate.score}</b>
               <span>{candidate.sector} · {fmtMoney(candidate.price)} · {candidate.action}</span>
-              <span>模型分 {candidate.model_score} · 数据质量 {candidate.data_quality.toFixed(0)}% · {candidate.signal}</span>
-              <span>{candidate.reference_source}</span>
+              <span>模型分 {candidate.model_score} · 数据质量 {candidate.data_quality.toFixed(0)}% · 流动性 {candidate.liquidity_score || "-"}</span>
+              <span>{candidate.exchange || "US"} · 成交额 {candidate.dollar_volume ? fmtMoney(candidate.dollar_volume) : "-"} · 市值 {candidate.market_cap ? fmtMoney(candidate.market_cap) : "-"}</span>
+              <span>{candidate.data_status || "真实扫描"} · {candidate.source_updated_at || "-"} · {candidate.reference_source}</span>
               <p>{candidate.reason}</p>
               <button onClick={() => addStockToWatchlist(candidate.ticker)}>加入监控</button>
             </article>
           ))}
         </div>
-      </section>
-
-      <section className="panel wide">
-        <div className="panel-head">
-          <div>
-            <h2>账户余额与仓位优化</h2>
-            <p>按当前账户余额、持仓市值和风险纪律给出动态配仓方向。</p>
-          </div>
-          <span className="badge">{allocation ? fmtMoney(allocation.cash_balance) : "$0.00"} 现金</span>
-        </div>
-        {allocation && (
-          <>
-            <div className="allocation-summary">
-              <strong>{allocation.cash_action}</strong>
-              <span>账户 {fmtMoney(allocation.account_total)} · 目标现金 {fmtMoney(allocation.cash_target)}</span>
-            </div>
-            <div className="compact-table">
-              {allocation.suggestions.map((item) => (
-                <div key={item.ticker}>
-                  <span>{item.ticker} · 当前 {item.current_weight.toFixed(2)}% / 目标 {item.target_weight.toFixed(2)}%</span>
-                  <b>{item.action}</b>
-                  <em>{fmtMoney(item.amount)}</em>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
       </section>
 
       <section className="panel wide">
@@ -1392,6 +1635,74 @@ function Watchlist({
           ))}
         </div>
       </section>
+
+      {tradeDraft && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <form className="inline-modal" onSubmit={handleTradeDraftSubmit}>
+            <header>
+              <strong>{tradeDraft.ticker} 线下交易记录</strong>
+              <button type="button" onClick={() => setTradeDraft(null)}>关闭</button>
+            </header>
+            <div className="offline-trade-form">
+              <label>
+                <span>券商</span>
+                <select value={tradeDraft.broker} onChange={(event) => setTradeDraft((current) => current ? { ...current, broker: event.target.value as OfflineTradeForm["broker"] } : current)}>
+                  <option value="za-bank">ZA Bank</option>
+                  <option value="usmart">uSMART</option>
+                  <option value="ibkr">IBKR</option>
+                  <option value="other">其他</option>
+                </select>
+              </label>
+              <label>
+                <span>方向</span>
+                <select value={tradeDraft.side} onChange={(event) => setTradeDraft((current) => current ? { ...current, side: event.target.value as OfflineTradeForm["side"] } : current)}>
+                  <option value="BUY">买入</option>
+                  <option value="SELL">卖出</option>
+                </select>
+              </label>
+              <label>
+                <span>数量</span>
+                <input type="number" min="0.0001" step="0.0001" value={tradeDraft.qty} onChange={(event) => setTradeDraft((current) => current ? { ...current, qty: event.target.value } : current)} />
+              </label>
+              <label>
+                <span>成交价</span>
+                <input type="number" min="0" step="0.01" value={tradeDraft.price} onChange={(event) => setTradeDraft((current) => current ? { ...current, price: event.target.value } : current)} />
+              </label>
+              <label>
+                <span>成交时间</span>
+                <input type="datetime-local" value={tradeDraft.executed_at} onChange={(event) => setTradeDraft((current) => current ? { ...current, executed_at: event.target.value } : current)} />
+              </label>
+              <label className="wide-input">
+                <span>备注</span>
+                <input value={tradeDraft.note} onChange={(event) => setTradeDraft((current) => current ? { ...current, note: event.target.value } : current)} />
+              </label>
+            </div>
+            <div className="button-row">
+              <button type="button" onClick={() => setTradeDraft(null)}>取消</button>
+              <button type="submit" className="primary">提交并刷新</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {cashDraft && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <form className="inline-modal compact" onSubmit={handleCashDraftSubmit}>
+            <header>
+              <strong>{cashDraft.broker} 可用现金</strong>
+              <button type="button" onClick={() => setCashDraft(null)}>关闭</button>
+            </header>
+            <label>
+              <span>可用现金 USD</span>
+              <input type="number" min="0" step="0.01" value={cashDraft.value} onChange={(event) => setCashDraft((current) => current ? { ...current, value: event.target.value } : current)} />
+            </label>
+            <div className="button-row">
+              <button type="button" onClick={() => setCashDraft(null)}>取消</button>
+              <button type="submit" className="primary">保存并刷新</button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
@@ -1403,6 +1714,7 @@ function Discipline({
   selectedTicker,
   recordZaManualExecution,
   submitOfflineTrade,
+  deleteManualExecution,
   importUsmartScreenshot,
   importZaScreenshot
 }: {
@@ -1412,6 +1724,7 @@ function Discipline({
   selectedTicker: string;
   recordZaManualExecution: () => Promise<void>;
   submitOfflineTrade: (form: OfflineTradeForm) => Promise<void>;
+  deleteManualExecution: (order: Order) => Promise<void>;
   importUsmartScreenshot: () => Promise<void>;
   importZaScreenshot: () => Promise<void>;
 }) {
@@ -1543,6 +1856,7 @@ function Discipline({
               <span>{order.ticker}</span>
               <b>{order.qty} 股</b>
               <em>{order.order_type}</em>
+              {order.order_type === "MANUAL" && <button type="button" onClick={() => deleteManualExecution(order)}>删除</button>}
             </div>
           ))}
         </div>

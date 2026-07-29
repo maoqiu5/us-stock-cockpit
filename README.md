@@ -36,6 +36,8 @@ data/usstock/         # 本地数据目录，生产数据不提交 Git
 
 关键文档：
 
+- `docs/PRD.md`：产品需求、数据原则、路线图和最近版本摘要。
+- `CHANGELOG.md`：详细迭代历史；每次功能、算法、数据源、部署或重要文档更新都必须追加记录。
 - `docs/AI_RESUME_CONTEXT.md`：给新 AI 会话快速接手项目。
 - `docs/DEPLOYMENT.md`：美股项目生产部署说明。
 - `docs/BRIANHUB_MULTI_PROJECT_GUIDE.md`：`brianhub.net` 多项目部署边界和接入方式。
@@ -84,17 +86,27 @@ curl -H 'x-app-password: 本地测试密码' http://127.0.0.1:8000/portfolio/hol
 
 发布流程：
 
+当前短期规则：用户要求后续更新优先直接发到 VPS 上线，不通过 GitHub，除非用户另行要求。每次功能或算法更新必须先追加 `CHANGELOG.md` 版本记录；影响产品边界、路线图或数据原则时，再同步更新 `docs/PRD.md`。
+
+直接发布到 VPS 的常用方式：
+
+```bash
+# 按需同步改动文件，例如：
+scp backend/app/main.py root@192.236.235.229:/root/apps/us-stock-cockpit/backend/app/main.py
+
+# 后端改动：
+ssh root@192.236.235.229 'cd /root/apps/us-stock-cockpit && docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build backend'
+
+# 前端改动：
+ssh root@192.236.235.229 'cd /root/apps/us-stock-cockpit && docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build frontend'
+```
+
+如用户明确要求走 GitHub，再使用：
+
 ```bash
 git add 需要提交的文件
 git commit -m "本次修改说明"
 git push origin main
-```
-
-然后登录服务器执行：
-
-```bash
-cd /root/apps/us-stock-cockpit
-scripts/deploy_prod.sh
 ```
 
 发布后验证：

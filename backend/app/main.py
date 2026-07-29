@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -16,8 +18,8 @@ from .broker import USmartBrokerAdapter, broker_capabilities, broker_from_env, e
 from .data_sources import data_source_statuses, dynamic_watchlist, market_quotes
 from .gold_monitor import gold_monitor_snapshot
 from .historical_prices import is_us_market_open, previous_close_quotes, validate_yahoo_ticker
-from .market_cache import latest_screening_payload, save_quotes, save_screening_payload
-from .models import AccountBalance, AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DisciplineEvent, GoldManualTrade, GoldManualTradeRequest, GoldMonitor, Holding, HoldingAdvice, ManualExecutionRequest, ModelValidationItem, OrderRequest, PortfolioOptimization, PreviousCloseImportResult, Signal, TradeOrder, TradePlanItem, USmartScreenshotImportRequest, USmartScreenshotImportResult, ValidateTickerResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult, MarketQuote
+from .market_cache import DAILY_CLOSE_CACHE_DIR, QUOTE_CACHE_DIR, SCREENING_CACHE_DIR, latest_screening_payload, save_quotes, save_screening_payload
+from .models import AccountBalance, AccountCashUpdateRequest, AddWatchlistRequest, AllocationSuggestion, BacktestRequest, BrokerImportRequest, BrokerImportResult, CandidateStock, DataAssetSummary, DisciplineEvent, DisciplineNotification, GoldManualTrade, GoldManualTradeRequest, GoldMonitor, Holding, HoldingAdvice, ManualExecutionRequest, ModelValidationItem, OrderRequest, PortfolioOptimization, PostMarketReview, PreviousCloseImportResult, Signal, TradeOrder, TradePlanItem, USmartScreenshotImportRequest, USmartScreenshotImportResult, ValidateTickerResult, WatchlistItem, ZABankScreenshotImportRequest, ZABankScreenshotImportResult, MarketQuote
 from .risk import RiskConfig, RiskEngine
 from .seed import EVENTS, HOLDINGS, ORDERS, STRATEGIES, WATCHLIST
 from .strategy import generate_signal, run_backtest
@@ -65,6 +67,8 @@ state = {
 GOLD_MANUAL_TRADES: list[GoldManualTrade] = []
 LOCAL_STATE_PATH = Path(os.environ.get("LOCAL_STATE_PATH", "data/usstock/local_state.json"))
 MODEL_VALIDATION_BY_TICKER: dict[str, dict[str, float | str]] = {}
+MODEL_VALIDATION_CACHE_SECONDS = 6 * 60 * 60
+MODEL_VALIDATION_CACHE: tuple[float, list[ModelValidationItem]] | None = None
 MODEL_VALIDATION_PERIODS = {
     "short": ("2026-05-01", "2026-07-16", 0.30),
     "medium": ("2025-07-16", "2026-07-16", 0.50),
@@ -72,7 +76,14 @@ MODEL_VALIDATION_PERIODS = {
 }
 SCREENING_CACHE_SECONDS = 15 * 60
 SCREENING_CACHE: tuple[float, list[CandidateStock]] | None = None
-LOW_PRICE_CANDIDATE_LIMIT = 12
+SCREENING_REFRESH_LOCK = threading.Lock()
+SCREENING_REFRESHING = False
+CANDIDATE_LIMIT = 12
+CANDIDATE_MIN_PRICE = 1.0
+CANDIDATE_MIN_VOLUME = 500_000
+CANDIDATE_MIN_DOLLAR_VOLUME = 5_000_000
+CANDIDATE_MIN_MARKET_CAP = 100_000_000
+CURRENT_CANDIDATE_ACTIONS = {"中长期候选", "观察候选", "估值偏贵，等回调", "趋势破坏，暂避", "暂不纳入"}
 
 
 def _load_local_state() -> None:
@@ -136,6 +147,9 @@ _load_local_state()
 async def require_app_password(request: Request, call_next):
     app_password = os.getenv("APP_PASSWORD", "").strip()
     if not app_password or request.method == "OPTIONS" or request.url.path == "/health":
+        return await call_next(request)
+
+    if request.headers.get("X-BrianHub-SSO", "") == "1":
         return await call_next(request)
 
     header_password = request.headers.get("X-App-Password", "")
@@ -403,6 +417,26 @@ def account_balances() -> list[AccountBalance]:
     return _account_balances()
 
 
+@app.post("/portfolio/account-balances/{broker}")
+def update_account_cash(broker: str, request: AccountCashUpdateRequest) -> AccountBalance:
+    if broker not in ACCOUNT_CASH_BALANCES:
+        raise HTTPException(status_code=404, detail="broker not found")
+    ACCOUNT_CASH_BALANCES[broker] = round(float(request.available_cash), 2)
+    _save_local_state()
+    account = next((item for item in _account_balances() if item.broker == broker), None)
+    if not account:
+        return AccountBalance(
+            broker=broker,  # type: ignore[arg-type]
+            name=ACCOUNT_NAMES.get(broker, broker),
+            available_cash=ACCOUNT_CASH_BALANCES[broker],
+            holding_value=0,
+            account_total=ACCOUNT_CASH_BALANCES[broker],
+            updated_at=datetime.now().isoformat(timespec="seconds"),
+            source="手动设置账户现金",
+        )
+    return account.model_copy(update={"source": "手动设置账户现金"})
+
+
 @app.get("/advice/holdings")
 def holding_advice() -> list[HoldingAdvice]:
     account_total = max(_account_total(), 1)
@@ -471,66 +505,109 @@ def holding_advice() -> list[HoldingAdvice]:
 
 @app.get("/execution/plan")
 def execution_plan() -> list[TradePlanItem]:
-    account_total = max(_account_total(), 1)
-    holding_map = _aggregate_holdings()
+    account_balances = {account.broker: account for account in _account_balances()}
+    plan_accounts = _plan_accounts(account_balances)
     quotes = {quote.ticker: quote for quote in market_quotes([item.ticker for item in WATCHLIST])}
     plans: list[TradePlanItem] = []
     for item in dynamic_watchlist(WATCHLIST, HOLDINGS, MODEL_VALIDATION_BY_TICKER, quotes):
-        holding = holding_map.get(item.ticker)
-        quote = quotes.get(item.ticker)
-        reference_price = quote.price if quote else (holding["price"] if holding else 0)
-        current_amount = holding["value"] if holding else 0
-        current_weight = current_amount / account_total
-        target_weight, reason_bits, blockers = _target_weight_for_plan(item, holding, current_weight)
-        target_amount = round(account_total * target_weight, 2)
-        raw_delta = target_amount - current_amount
-        side = "NONE"
-        action = "观察不交易"
-        delta_amount = 0.0
-        if blockers:
-            action = "禁止买入/等待"
-        elif raw_delta > 25 and item.signal == "BUY":
-            side = "BUY"
-            action = "分批买入"
-            delta_amount = min(raw_delta, max(_cash_balance() - account_total * 0.08, 0))
-            if delta_amount < 25:
-                side = "NONE"
-                action = "现金不足/等待"
-                blockers.append("可用现金低于目标现金垫")
-                delta_amount = 0.0
-        elif raw_delta < -25:
-            side = "SELL"
-            action = "减仓到目标"
-            delta_amount = raw_delta
-        suggested_qty = _suggested_qty(abs(delta_amount), reference_price)
-        if side == "SELL" and holding:
-            suggested_qty = min(suggested_qty, int(holding["qty"]))
-        stop_loss_price, take_profit_price = _execution_price_lines(item, holding, reference_price)
-        confidence = _plan_confidence(item, side, blockers)
-        plans.append(
-            TradePlanItem(
-                ticker=item.ticker,
-                name=item.name,
-                broker=str(holding["broker"] if holding else "watchlist"),
-                signal=item.signal,
-                model_score=item.model_score,
-                action=action,
-                side=side,
-                current_weight=round(current_weight * 100, 2),
-                target_weight=round(target_weight * 100, 2),
-                current_amount=round(current_amount, 2),
-                target_amount=target_amount,
-                delta_amount=round(delta_amount, 2),
-                reference_price=round(reference_price, 2),
-                suggested_qty=suggested_qty,
-                stop_loss_price=stop_loss_price,
-                take_profit_price=take_profit_price,
-                confidence=confidence,
-                reason="；".join(reason_bits + ([item.signal_reason] if item.signal_reason else []))[:240],
-                blockers=blockers,
-            )
-        )
-    return sorted(plans, key=lambda plan: (plan.side == "NONE", -abs(plan.delta_amount), plan.ticker))
+        item_holdings = [holding for holding in HOLDINGS if holding.ticker == item.ticker]
+        if item_holdings:
+            for holding in item_holdings:
+                plans.append(_execution_plan_for_account(item, holding.broker, account_balances, quotes, _holding_to_plan_context(holding)))
+            continue
+        for broker in plan_accounts:
+            plans.append(_execution_plan_for_account(item, broker, account_balances, quotes, None))
+    return sorted(plans, key=lambda plan: (plan.side == "NONE", plan.broker, -abs(plan.delta_amount), plan.ticker))
+
+
+def _execution_plan_for_account(
+    item: WatchlistItem,
+    broker: str,
+    account_balances: dict[str, AccountBalance],
+    quotes: dict[str, MarketQuote],
+    holding: dict[str, float | str] | None,
+) -> TradePlanItem:
+    account = account_balances.get(broker)
+    account_total = max(account.account_total if account else _account_total(), 1)
+    available_cash = round(account.available_cash if account else 0, 2)
+    quote = quotes.get(item.ticker)
+    reference_price = float(quote.price if quote else (holding["price"] if holding else item.entry_high_price or 0))
+    current_amount = float(holding["value"]) if holding else 0.0
+    current_weight = current_amount / account_total
+    target_weight, reason_bits, blockers = _target_weight_for_plan(item, holding, current_weight)
+    target_amount = round(account_total * target_weight, 2)
+    raw_delta = target_amount - current_amount
+    side = "NONE"
+    action = "观察不交易"
+    delta_amount = 0.0
+    if blockers:
+        action = "禁止买入/等待"
+    elif raw_delta > 25 and item.signal == "BUY":
+        side = "BUY"
+        action = "分批买入"
+        delta_amount = min(raw_delta, max(available_cash - account_total * 0.08, 0))
+        if delta_amount < 25:
+            side = "NONE"
+            action = "现金不足/等待"
+            blockers.append(f"{ACCOUNT_NAMES.get(broker, broker)} 可用现金低于 8% 现金垫")
+            delta_amount = 0.0
+    elif raw_delta < -25:
+        side = "SELL"
+        action = "减仓到目标"
+        delta_amount = raw_delta
+    suggested_qty = _suggested_qty(abs(delta_amount), reference_price)
+    if side == "SELL" and holding:
+        suggested_qty = min(suggested_qty, int(float(holding["qty"])))
+    stop_loss_price, take_profit_price = _execution_price_lines(item, holding, reference_price)
+    confidence = _plan_confidence(item, side, blockers)
+    return TradePlanItem(
+        ticker=item.ticker,
+        name=item.name,
+        broker=broker,
+        account_name=ACCOUNT_NAMES.get(broker, broker),
+        account_total=round(account_total, 2),
+        available_cash=available_cash,
+        signal=item.signal,
+        model_score=item.model_score,
+        action=action,
+        side=side,
+        current_weight=round(current_weight * 100, 2),
+        target_weight=round(target_weight * 100, 2),
+        current_amount=round(current_amount, 2),
+        target_amount=target_amount,
+        delta_amount=round(delta_amount, 2),
+        reference_price=round(reference_price, 2),
+        suggested_qty=suggested_qty,
+        stop_loss_price=stop_loss_price,
+        take_profit_price=take_profit_price,
+        entry_low_price=item.entry_low_price,
+        entry_high_price=item.entry_high_price,
+        chase_limit_price=item.chase_limit_price,
+        max_loss_amount=item.max_loss_amount,
+        confidence=confidence,
+        reason="；".join(reason_bits + ([item.signal_reason] if item.signal_reason else []))[:240],
+        blockers=blockers,
+    )
+
+
+def _holding_to_plan_context(holding: Holding) -> dict[str, float | str]:
+    return {
+        "qty": holding.qty,
+        "value": holding.market_value,
+        "cost": holding.avg_cost * holding.qty,
+        "pnl": holding.pnl,
+        "price": holding.market_price,
+        "broker": holding.broker,
+    }
+
+
+def _plan_accounts(account_balances: dict[str, AccountBalance]) -> list[str]:
+    accounts = [
+        account.broker
+        for account in account_balances.values()
+        if account.available_cash > 0 or account.account_total > 0
+    ]
+    return accounts or ["usmart"]
 
 
 def _aggregate_holdings() -> dict[str, dict[str, float | str]]:
@@ -558,7 +635,7 @@ def _account_balances() -> list[AccountBalance]:
     for broker in brokers:
         cash = round(float(ACCOUNT_CASH_BALANCES.get(broker, 0.0)), 2)
         holding_value = round(float(holding_values.get(broker, 0.0)), 2)
-        if cash == 0 and holding_value == 0:
+        if cash == 0 and holding_value == 0 and broker not in {"za-bank", "usmart"}:
             continue
         balances.append(
             AccountBalance(
@@ -575,7 +652,7 @@ def _account_balances() -> list[AccountBalance]:
 
 
 def _target_weight_for_plan(item: WatchlistItem, holding: dict[str, float | str] | None, current_weight: float) -> tuple[float, list[str], list[str]]:
-    reasons: list[str] = [f"股票池信号 {item.signal}", f"模型分 {item.model_score}" if item.model_reason else "模型待验证"]
+    reasons: list[str] = [f"中长线股票池信号 {item.signal}", f"模型分 {item.model_score}" if item.model_reason else "模型待验证"]
     blockers: list[str] = []
     pnl_pct = 0.0
     if holding and float(holding["cost"]) > 0:
@@ -593,7 +670,7 @@ def _target_weight_for_plan(item: WatchlistItem, holding: dict[str, float | str]
             target = min(current_weight, 0.08)
         if item.trend == "下行":
             blockers.append("趋势下行，等待价格企稳")
-        reasons.append(f"BUY 目标仓位 {target * 100:.1f}%")
+        reasons.append(f"中长线分批建仓，目标仓位 {target * 100:.1f}%")
         return target, reasons, blockers
     if item.signal == "RISK":
         if pnl_pct <= -35:
@@ -610,7 +687,7 @@ def _target_weight_for_plan(item: WatchlistItem, holding: dict[str, float | str]
             target = 0.0
         return target, reasons, blockers
     target = current_weight if holding else 0.0
-    reasons.append("WATCH 状态只观察，不主动交易")
+    reasons.append("中长线观察，等待更合理买入区间")
     return target, reasons, blockers
 
 
@@ -653,30 +730,89 @@ def screening_candidates() -> list[CandidateStock]:
     now = time.time()
     if SCREENING_CACHE and SCREENING_CACHE[1] and now - SCREENING_CACHE[0] < SCREENING_CACHE_SECONDS:
         return SCREENING_CACHE[1]
-    existing = {item.ticker.replace(".US", "") for item in WATCHLIST}
-    pool = [item for item in _low_price_candidate_universe() if item.ticker.replace(".US", "") not in existing]
-    dynamic_items = dynamic_watchlist(pool)
-    candidates = [_candidate_from_watchlist_item(item) for item in dynamic_items]
-    candidates = sorted(candidates, key=lambda item: item.score, reverse=True)[:6]
-    save_screening_payload("low_price_candidates", [candidate.model_dump() for candidate in candidates])
+    cached = _cached_candidates()
+    if cached:
+        SCREENING_CACHE = (now, cached)
+        _start_screening_refresh()
+        return cached
+    candidates = _build_screening_candidates()
     if candidates:
         SCREENING_CACHE = (now, candidates)
     return candidates
 
 
-def _low_price_candidate_universe() -> list[WatchlistItem]:
+def _cached_candidates() -> list[CandidateStock]:
+    payload = latest_screening_payload("stock_candidates")
+    if not isinstance(payload, list) or not payload:
+        return []
+    candidates: list[CandidateStock] = []
+    for row in payload:
+        if isinstance(row, dict):
+            action = str(row.get("action") or "")
+            reason = str(row.get("reason") or "")
+            if action not in CURRENT_CANDIDATE_ACTIONS or "中长期真实筛选" not in reason:
+                return []
+            try:
+                candidates.append(CandidateStock.model_validate({**row, "data_status": "真实缓存"}))
+            except Exception:
+                continue
+    return candidates
+
+
+def _start_screening_refresh() -> None:
+    global SCREENING_REFRESHING
+    if SCREENING_REFRESHING:
+        return
+    with SCREENING_REFRESH_LOCK:
+        if SCREENING_REFRESHING:
+            return
+        SCREENING_REFRESHING = True
+    thread = threading.Thread(target=_refresh_screening_candidates, daemon=True)
+    thread.start()
+
+
+def _refresh_screening_candidates() -> None:
+    global SCREENING_CACHE, SCREENING_REFRESHING
+    try:
+        candidates = _build_screening_candidates()
+        if candidates:
+            SCREENING_CACHE = (time.time(), candidates)
+    finally:
+        SCREENING_REFRESHING = False
+
+
+def _build_screening_candidates() -> list[CandidateStock]:
+    existing = {item.ticker.replace(".US", "") for item in WATCHLIST}
+    rows_by_ticker = {str(row.get("symbol") or "").upper(): row for row in _low_price_candidate_rows()}
+    pool = [item for item in _low_price_candidate_universe(rows_by_ticker.values()) if item.ticker.replace(".US", "") not in existing]
+    dynamic_items = dynamic_watchlist(pool)
+    candidates = [_candidate_from_watchlist_item(item, rows_by_ticker.get(item.ticker.replace(".US", ""), {})) for item in dynamic_items]
+    candidates = sorted(candidates, key=lambda item: item.score, reverse=True)[:6]
+    save_screening_payload("stock_candidates", [candidate.model_dump() for candidate in candidates])
+    return candidates
+
+
+def _low_price_candidate_rows() -> list[dict]:
     rows = _fmp_low_price_screener()
+    filtered = _valid_low_price_rows(rows)
+    if filtered:
+        return filtered[:CANDIDATE_LIMIT]
+    return []
+
+
+def _low_price_candidate_universe(rows=None) -> list[WatchlistItem]:
+    rows = list(rows) if rows is not None else _low_price_candidate_rows()
     pool: list[WatchlistItem] = []
     for row in rows:
         ticker = str(row.get("symbol") or "").upper()
         price = _float_value(row.get("price"))
-        if not ticker or price <= 0 or price >= 10:
+        if not ticker or not _passes_low_price_filters(row):
             continue
         pool.append(
             WatchlistItem(
                 ticker=ticker,
                 name=str(row.get("companyName") or row.get("name") or ticker),
-                sector=str(row.get("sector") or row.get("industry") or "Low Price"),
+                sector=str(row.get("sector") or row.get("industry") or "US Stock"),
                 pe=30.0,
                 peg=1.8,
                 roi=12.0,
@@ -686,7 +822,7 @@ def _low_price_candidate_universe() -> list[WatchlistItem]:
                 signal="WATCH",
             )
         )
-    return pool[:LOW_PRICE_CANDIDATE_LIMIT]
+    return pool[:CANDIDATE_LIMIT]
 
 
 def _fmp_low_price_screener() -> list[dict]:
@@ -696,15 +832,14 @@ def _fmp_low_price_screener() -> list[dict]:
         cached_rows = cached if isinstance(cached, list) and cached else []
         return cached_rows or _finviz_low_price_screener()
     params = urlencode({
-        "priceMoreThan": 1,
-        "priceLowerThan": 10,
-        "marketCapMoreThan": 100_000_000,
-        "volumeMoreThan": 500_000,
+        "priceMoreThan": CANDIDATE_MIN_PRICE,
+        "marketCapMoreThan": CANDIDATE_MIN_MARKET_CAP,
+        "volumeMoreThan": CANDIDATE_MIN_VOLUME,
         "isActivelyTrading": "true",
-        "limit": 40,
+        "limit": 80,
         "apikey": api_key,
     })
-    request = Request(f"https://financialmodelingprep.com/stable/company-screener?{params}", headers={"User-Agent": "Mozilla/5.0"})
+    request = UrlRequest(f"https://financialmodelingprep.com/stable/company-screener?{params}", headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urlopen(request, timeout=12) as response:
             payload = json.load(response)
@@ -724,15 +859,14 @@ def _fmp_low_price_screener() -> list[dict]:
 
 def _fmp_stock_screener_v3(api_key: str) -> list[dict]:
     params = urlencode({
-        "priceMoreThan": 1,
-        "priceLowerThan": 10,
-        "marketCapMoreThan": 100_000_000,
-        "volumeMoreThan": 500_000,
+        "priceMoreThan": CANDIDATE_MIN_PRICE,
+        "marketCapMoreThan": CANDIDATE_MIN_MARKET_CAP,
+        "volumeMoreThan": CANDIDATE_MIN_VOLUME,
         "isActivelyTrading": "true",
-        "limit": 60,
+        "limit": 100,
         "apikey": api_key,
     })
-    request = Request(f"https://financialmodelingprep.com/api/v3/stock-screener?{params}", headers={"User-Agent": "Mozilla/5.0"})
+    request = UrlRequest(f"https://financialmodelingprep.com/api/v3/stock-screener?{params}", headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urlopen(request, timeout=12) as response:
             payload = json.load(response)
@@ -758,8 +892,8 @@ def _fmp_stock_list_low_price(api_key: str) -> list[dict]:
 
 
 def _finviz_low_price_screener() -> list[dict]:
-    url = "https://finviz.com/screener.ashx?v=111&f=sh_avgvol_o500,sh_price_u10,sh_relvol_o1"
-    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    url = "https://finviz.com/screener.ashx?v=111&f=sh_avgvol_o500,sh_relvol_o1"
+    request = UrlRequest(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urlopen(request, timeout=12) as response:
             html = response.read().decode("utf-8", errors="ignore")
@@ -776,17 +910,25 @@ def _finviz_low_price_screener() -> list[dict]:
             continue
         ticker = ticker_match.group(1).upper()
         price = _float_value(cells[-3])
-        if price <= 1 or price >= 10:
+        market_cap = _compact_number(cells[6] if len(cells) > 6 else "")
+        volume = _compact_number(cells[-1] if cells else "")
+        if price <= CANDIDATE_MIN_PRICE:
             continue
         industry = cells[4] if len(cells) > 4 else "Finviz screener"
         if "exchange traded fund" in industry.lower() or "etf" in industry.lower():
             continue
+        dollar_volume = price * volume
+        if volume < CANDIDATE_MIN_VOLUME or dollar_volume < CANDIDATE_MIN_DOLLAR_VOLUME or market_cap < CANDIDATE_MIN_MARKET_CAP:
+            continue
         rows.append({
             "symbol": ticker,
             "companyName": cells[2] if len(cells) > 2 else ticker,
-            "sector": cells[3] if len(cells) > 3 else "Low Price",
+            "sector": cells[3] if len(cells) > 3 else "US Stock",
             "industry": industry,
             "price": price,
+            "volume": volume,
+            "marketCap": market_cap,
+            "dollarVolume": dollar_volume,
             "source": "Finviz screener",
         })
     rows = rows[:60]
@@ -802,7 +944,7 @@ def _strip_html(value: str) -> str:
 
 
 def _fmp_stock_list_low_price_from_url(url: str) -> list[dict]:
-    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    request = UrlRequest(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urlopen(request, timeout=20) as response:
             payload = json.load(response)
@@ -816,20 +958,29 @@ def _fmp_stock_list_low_price_from_url(url: str) -> list[dict]:
         if not isinstance(row, dict):
             continue
         price = _float_value(row.get("price"))
+        volume = _float_value(row.get("volume"))
+        market_cap = _float_value(row.get("marketCap") or row.get("marketCapMoreThan"))
         exchange = str(row.get("exchangeShortName") or row.get("exchange") or "").upper()
         symbol = str(row.get("symbol") or "").upper()
         stock_type = str(row.get("type") or "stock").lower()
-        if not symbol or "." in symbol or price <= 1 or price >= 10:
+        if not symbol or "." in symbol or price <= CANDIDATE_MIN_PRICE:
             continue
         if exchange not in accepted_exchanges:
             continue
         if stock_type not in {"stock", "common stock", ""}:
             continue
+        if volume and volume < CANDIDATE_MIN_VOLUME:
+            continue
+        if market_cap and market_cap < CANDIDATE_MIN_MARKET_CAP:
+            continue
         rows.append({
             "symbol": symbol,
             "companyName": row.get("name") or symbol,
             "price": price,
-            "sector": row.get("sector") or "Low Price",
+            "volume": volume,
+            "marketCap": market_cap,
+            "dollarVolume": price * volume if volume else 0,
+            "sector": row.get("sector") or "US Stock",
             "industry": row.get("industry") or "US listed stock",
             "exchange": exchange,
             "source": "FMP stock-list",
@@ -841,32 +992,53 @@ def _valid_low_price_rows(rows: list[dict]) -> list[dict]:
     output: list[dict] = []
     for row in rows:
         ticker = str(row.get("symbol") or "").upper()
-        price = _float_value(row.get("price"))
-        if ticker and 1 < price < 10:
+        if ticker and _passes_low_price_filters(row):
             output.append(row)
     return output
 
 
-def _candidate_from_watchlist_item(item: WatchlistItem) -> CandidateStock:
+def _passes_low_price_filters(row: dict) -> bool:
+    price = _float_value(row.get("price"))
+    volume = _float_value(row.get("volume") or row.get("avgVolume"))
+    market_cap = _float_value(row.get("marketCap") or row.get("mktCap"))
+    dollar_volume = _float_value(row.get("dollarVolume")) or price * volume
+    exchange = str(row.get("exchangeShortName") or row.get("exchange") or "NASDAQ").upper()
+    stock_type = str(row.get("type") or row.get("securityType") or "stock").lower()
+    if price <= CANDIDATE_MIN_PRICE:
+        return False
+    if exchange and exchange not in {"NASDAQ", "NYSE", "AMEX"}:
+        return False
+    if stock_type not in {"stock", "common stock", "common", ""}:
+        return False
+    if volume and volume < CANDIDATE_MIN_VOLUME:
+        return False
+    if dollar_volume and dollar_volume < CANDIDATE_MIN_DOLLAR_VOLUME:
+        return False
+    if market_cap and market_cap < CANDIDATE_MIN_MARKET_CAP:
+        return False
+    return True
+
+
+def _candidate_from_watchlist_item(item: WatchlistItem, raw: dict | None = None) -> CandidateStock:
+    raw = raw or {}
     model = _candidate_model_summary(item.ticker)
     third_party = _third_party_reference(item.ticker)
     factor_score = _candidate_factor_score(item)
+    quality_score = _candidate_long_term_quality_score(item)
     trend_score = 100 if item.trend in {"上行", "横盘"} else (60 if item.trend == "过热" else 35)
+    liquidity_score = _candidate_liquidity_score(raw)
     reference_bonus = 6 if third_party["sentiment"] == "positive" else (-8 if third_party["sentiment"] == "negative" else 0)
     if model["data_quality"] < 50:
-        score = min(39, round(factor_score * 0.45 + trend_score * 0.15))
+        score = min(39, round(quality_score * 0.38 + factor_score * 0.18 + trend_score * 0.12 + liquidity_score * 0.10))
     else:
-        score = round(float(model["score"]) * 0.55 + factor_score * 0.35 + trend_score * 0.10 + reference_bonus)
+        score = round(float(model["score"]) * 0.40 + quality_score * 0.24 + factor_score * 0.14 + trend_score * 0.08 + liquidity_score * 0.10 + reference_bonus)
     score = max(0, min(100, score))
-    if score >= 70 and model["data_quality"] >= 80 and item.signal != "RISK":
-        action = "加入监控"
-    elif score >= 55 and model["data_quality"] >= 50:
-        action = "观察等待"
-    else:
-        action = "暂不加入"
+    action = _candidate_long_term_action(item, score, quality_score, float(model["data_quality"]))
     reason = (
-        f"10美元以下真实筛选；{model['best_strategy']} 多周期模型分 {model['score']}，真实数据 {model['data_quality']:.0f}%；"
-        f"因子分 {factor_score}，趋势 {item.trend}，股票池信号 {item.signal}；{third_party['summary']}。"
+        f"中长期真实筛选；质量分 {quality_score}，估值/成长因子分 {factor_score}，"
+        f"{model['best_strategy']} 多周期模型分 {model['score']}，真实数据 {model['data_quality']:.0f}%；"
+        f"趋势 {item.trend}，流动性分 {liquidity_score}，股票池信号 {item.signal}；"
+        f"{_candidate_long_term_reason(item, quality_score)}；{third_party['summary']}。"
     )
     if model["missing_samples"]:
         reason += f" 缺失 {model['missing_samples']} 个回测样本。"
@@ -881,8 +1053,125 @@ def _candidate_from_watchlist_item(item: WatchlistItem) -> CandidateStock:
         model_score=int(model["score"]),
         data_quality=round(float(model["data_quality"]), 2),
         signal=item.signal,
-        reference_source=str(third_party["source"]),
+        reference_source=_candidate_reference_source(raw, third_party),
+        liquidity_score=liquidity_score,
+        dollar_volume=round(_candidate_dollar_volume(raw), 2),
+        market_cap=round(_float_value(raw.get("marketCap") or raw.get("mktCap")), 2),
+        exchange=str(raw.get("exchangeShortName") or raw.get("exchange") or ""),
+        source_updated_at=time.strftime("%m/%d %H:%M"),
+        data_status="真实扫描",
     )
+
+
+def _candidate_long_term_quality_score(item: WatchlistItem) -> int:
+    if item.sector.upper() == "ETF":
+        return 72 if item.trend in {"上行", "横盘"} else 45
+    score = 0
+    if item.roi >= 20:
+        score += 30
+    elif item.roi >= 12:
+        score += 20
+    elif item.roi >= 8:
+        score += 10
+    if item.growth >= 15:
+        score += 25
+    elif item.growth >= 8:
+        score += 18
+    elif item.growth >= 4:
+        score += 8
+    if item.peg and item.peg <= 1.8:
+        score += 20
+    elif item.peg and item.peg <= 2.5:
+        score += 12
+    if item.pe and item.pe <= 30:
+        score += 15
+    elif item.pe and item.pe <= 45:
+        score += 8
+    if item.trend in {"上行", "横盘"}:
+        score += 10
+    elif item.trend == "过热":
+        score += 3
+    return max(0, min(100, score))
+
+
+def _candidate_long_term_action(item: WatchlistItem, score: int, quality_score: int, data_quality: float) -> str:
+    valuation_overheated = item.pe > 45 or item.peg > 2.5 or item.trend == "过热"
+    trend_broken = item.trend == "下行" or item.signal == "RISK"
+    if trend_broken:
+        return "趋势破坏，暂避"
+    if valuation_overheated:
+        return "估值偏贵，等回调"
+    if score >= 75 and quality_score >= 70 and data_quality >= 80:
+        return "中长期候选"
+    if score >= 58 and quality_score >= 55 and data_quality >= 50:
+        return "观察候选"
+    return "暂不纳入"
+
+
+def _candidate_long_term_reason(item: WatchlistItem, quality_score: int) -> str:
+    if item.trend == "下行" or item.signal == "RISK":
+        return "趋势或风险状态不支持中长期建仓"
+    if item.pe > 45 or item.peg > 2.5 or item.trend == "过热":
+        return "估值偏贵，适合纳入观察但等待回调买点"
+    if quality_score >= 70:
+        return "质量、成长和估值满足中长期跟踪要求"
+    if quality_score >= 55:
+        return "基本面尚可，先观察估值和趋势确认"
+    return "质量或成长条件不足，暂不作为中长期核心候选"
+
+
+def _candidate_reference_source(raw: dict, third_party: dict[str, str]) -> str:
+    source = str(raw.get("source") or "FMP screener")
+    return f"{source} · {third_party['source']}"
+
+
+def _candidate_dollar_volume(raw: dict) -> float:
+    price = _float_value(raw.get("price"))
+    volume = _float_value(raw.get("volume") or raw.get("avgVolume"))
+    return _float_value(raw.get("dollarVolume")) or price * volume
+
+
+def _candidate_liquidity_score(raw: dict, fallback_price: float = 0) -> int:
+    price = _float_value(raw.get("price")) or fallback_price
+    volume = _float_value(raw.get("volume") or raw.get("avgVolume"))
+    market_cap = _float_value(raw.get("marketCap") or raw.get("mktCap"))
+    dollar_volume = _float_value(raw.get("dollarVolume")) or price * volume
+    score = 35
+    if dollar_volume >= 50_000_000:
+        score += 35
+    elif dollar_volume >= 15_000_000:
+        score += 25
+    elif dollar_volume >= CANDIDATE_MIN_DOLLAR_VOLUME:
+        score += 15
+    if market_cap >= 1_000_000_000:
+        score += 20
+    elif market_cap >= 300_000_000:
+        score += 12
+    elif market_cap >= CANDIDATE_MIN_MARKET_CAP:
+        score += 6
+    if volume >= 2_000_000:
+        score += 10
+    elif volume >= CANDIDATE_MIN_VOLUME:
+        score += 5
+    return max(0, min(100, score))
+
+
+def _compact_number(value: str) -> float:
+    text = str(value or "").strip().replace(",", "")
+    if not text or text == "-":
+        return 0.0
+    multiplier = 1.0
+    suffix = text[-1].upper()
+    if suffix == "B":
+        multiplier = 1_000_000_000
+        text = text[:-1]
+    elif suffix == "M":
+        multiplier = 1_000_000
+        text = text[:-1]
+    elif suffix == "K":
+        multiplier = 1_000
+        text = text[:-1]
+    return _float_value(text) * multiplier
 
 
 def _candidate_price(ticker: str) -> float:
@@ -898,7 +1187,7 @@ def _third_party_reference(ticker: str) -> dict[str, str]:
     if not api_key:
         return {"source": "FMP analyst grades unavailable", "sentiment": "neutral", "summary": "第三方评级暂不可用"}
     params = urlencode({"symbol": ticker, "apikey": api_key})
-    request = Request(f"https://financialmodelingprep.com/stable/grades-consensus?{params}", headers={"User-Agent": "Mozilla/5.0"})
+    request = UrlRequest(f"https://financialmodelingprep.com/stable/grades-consensus?{params}", headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urlopen(request, timeout=8) as response:
             payload = json.load(response)
@@ -970,25 +1259,39 @@ def portfolio_optimization() -> PortfolioOptimization:
     account_total = max(_account_total(), 1)
     cash_target = round(account_total * 0.08, 2)
     suggestions: list[AllocationSuggestion] = []
-    target_weights = {"NOK.US": 0.04, "NOK": 0.03, "SMR.US": 0.02, "IAU": 0.08, "NVDA": 0.02}
+    watchlist_by_ticker = {item.ticker: item for item in dynamic_watchlist(WATCHLIST, HOLDINGS, MODEL_VALIDATION_BY_TICKER)}
+    account_balances = {account.broker: account for account in _account_balances()}
     for holding in HOLDINGS:
-        current_weight = holding.market_value / account_total
-        target_weight = target_weights.get(holding.ticker, 0.03)
-        diff = round((target_weight - current_weight) * account_total, 2)
+        account = account_balances.get(holding.broker)
+        broker_total = max(account.account_total if account else account_total, 1)
+        current_weight = holding.market_value / broker_total
+        item = watchlist_by_ticker.get(holding.ticker)
+        pnl_pct = holding.pnl / max(holding.avg_cost * holding.qty, 0.01) * 100
+        target_weight = _dynamic_target_weight(item, current_weight, pnl_pct)
+        diff = round((target_weight - current_weight) * broker_total, 2)
         if diff > 25:
-            action = "可小额补足"
+            action = "可小额补足" if item and item.data_status in {"实时", "准实时"} else "只观察不补"
         elif diff < -25:
             action = "减仓释放现金"
         else:
             action = "维持"
+        reason_bits = [
+            f"账户 {ACCOUNT_NAMES.get(holding.broker, holding.broker)}",
+            f"信号 {item.signal}" if item else "未入股票池",
+            f"盯盘 {item.watch_label} {item.watch_score}" if item else "缺少盯盘分",
+            f"持仓盈亏 {pnl_pct:+.1f}%",
+            f"数据 {item.data_status}" if item else "数据缺失",
+        ]
         suggestions.append(
             AllocationSuggestion(
                 ticker=holding.ticker,
+                broker=holding.broker,
+                account_name=ACCOUNT_NAMES.get(holding.broker, holding.broker),
                 current_weight=round(current_weight * 100, 2),
                 target_weight=round(target_weight * 100, 2),
                 action=action,
                 amount=abs(diff),
-                reason="目标权重来自当前风控：高回撤标的降权，黄金 ETF 保留防守仓。",
+                reason="；".join(reason_bits),
             )
         )
     cash_balance = _cash_balance()
@@ -1002,8 +1305,56 @@ def portfolio_optimization() -> PortfolioOptimization:
     )
 
 
+def _dynamic_target_weight(item: WatchlistItem | None, current_weight: float, pnl_pct: float) -> float:
+    if item is None:
+        return min(current_weight, 0.03)
+    if item.signal == "RISK":
+        if pnl_pct <= -35:
+            return min(current_weight, 0.03)
+        if current_weight >= 0.12:
+            return 0.08
+        return min(current_weight, 0.05)
+    if item.signal == "BUY" and item.data_status in {"实时", "准实时"}:
+        if item.watch_score >= 75 and item.model_score >= 75:
+            return 0.08
+        if item.watch_score >= 62 or item.model_score >= 65:
+            return 0.06
+        return 0.05
+    if pnl_pct <= -15:
+        return min(current_weight, 0.05)
+    return current_weight if current_weight else 0.0
+
+
 @app.get("/models/validation")
 def model_validation() -> list[ModelValidationItem]:
+    global MODEL_VALIDATION_CACHE
+    now = time.time()
+    if MODEL_VALIDATION_CACHE and now - MODEL_VALIDATION_CACHE[0] < MODEL_VALIDATION_CACHE_SECONDS:
+        return MODEL_VALIDATION_CACHE[1]
+    output, ticker_scores = _compute_model_validation()
+    MODEL_VALIDATION_BY_TICKER.clear()
+    MODEL_VALIDATION_BY_TICKER.update(ticker_scores)
+    MODEL_VALIDATION_CACHE = (now, output)
+    save_screening_payload(
+        "model_validation_latest",
+        {
+            "as_of": datetime.now().isoformat(timespec="seconds"),
+            "items": [item.model_dump(mode="json") for item in output],
+            "ticker_scores": ticker_scores,
+        },
+    )
+    return output
+
+
+@app.get("/models/validation/history")
+def model_validation_history() -> dict:
+    payload = latest_screening_payload("model_validation_latest")
+    if not payload:
+        return {"as_of": "", "items": [], "ticker_scores": {}}
+    return payload
+
+
+def _compute_model_validation() -> tuple[list[ModelValidationItem], dict[str, dict[str, float | str]]]:
     output: list[ModelValidationItem] = []
     ticker_results: dict[str, list[dict[str, float | str]]] = {item.ticker: [] for item in WATCHLIST}
     for strategy in STRATEGIES:
@@ -1079,9 +1430,7 @@ def model_validation() -> list[ModelValidationItem]:
                 tuning_note=note,
             )
         )
-    MODEL_VALIDATION_BY_TICKER.clear()
-    MODEL_VALIDATION_BY_TICKER.update(_ticker_validation_scores(ticker_results))
-    return output
+    return output, _ticker_validation_scores(ticker_results)
 
 
 def _weighted_strategy_rows(period_results: dict[str, list]) -> list[dict[str, float | str]]:
@@ -1150,6 +1499,127 @@ def _ticker_validation_scores(ticker_results: dict[str, list[dict[str, float | s
     return scores
 
 
+@app.get("/data-assets/summary")
+def data_assets_summary() -> list[DataAssetSummary]:
+    return [
+        _asset_summary("行情快照", QUOTE_CACHE_DIR, "*.json"),
+        _asset_summary("日线缓存", DAILY_CLOSE_CACHE_DIR, "*.json"),
+        _asset_summary("筛选/验证/复盘", SCREENING_CACHE_DIR, "*.json"),
+    ]
+
+
+@app.post("/daily-snapshot")
+def create_daily_snapshot() -> dict:
+    items = watchlist()
+    plans = execution_plan()
+    candidates = _cached_candidates()
+    payload = {
+        "as_of": datetime.now().isoformat(timespec="seconds"),
+        "watchlist": [item.model_dump(mode="json") for item in items],
+        "trade_plan": [item.model_dump(mode="json") for item in plans],
+        "candidates": [item.model_dump(mode="json") for item in candidates],
+        "holdings": [item.model_dump(mode="json") for item in HOLDINGS],
+        "account_balances": [item.model_dump(mode="json") for item in _account_balances()],
+        "notifications": [item.model_dump(mode="json") for item in notifications()],
+    }
+    save_screening_payload("daily_snapshot", payload)
+    return {
+        "as_of": payload["as_of"],
+        "watchlist_count": len(items),
+        "candidate_count": len(candidates),
+        "trade_actions": len([item for item in plans if item.side != "NONE"]),
+        "saved": True,
+    }
+
+
+@app.get("/daily-review")
+def daily_review() -> PostMarketReview:
+    payload = latest_screening_payload("daily_snapshot") or {}
+    items = [WatchlistItem.model_validate(item) for item in payload.get("watchlist", [])] if payload else watchlist()
+    plans = [TradePlanItem.model_validate(item) for item in payload.get("trade_plan", [])] if payload else execution_plan()
+    candidates = [CandidateStock.model_validate(item) for item in payload.get("candidates", [])] if payload else _cached_candidates()
+    risk_items = []
+    for item in items:
+        if item.signal == "RISK":
+            risk_items.append(f"{item.ticker}：{item.signal_reason or item.watch_reason}")
+        elif item.data_status in {"缓存", "昨收", "样例", "无行情"}:
+            risk_items.append(f"{item.ticker}：行情状态 {item.data_status}")
+    unexecuted = [item for item in plans if item.side != "NONE"]
+    focus = [f"{item.ticker} {item.action}，参考价 {item.reference_price:.2f}" for item in unexecuted[:5]]
+    if not focus:
+        focus = [f"{item.ticker} {item.watch_label}" for item in sorted(items, key=lambda row: row.watch_score, reverse=True)[:5] if item.watch_score]
+    return PostMarketReview(
+        as_of=str(payload.get("as_of") or datetime.now().isoformat(timespec="seconds")),
+        snapshot_source="本地每日快照" if payload else "当前实时计算",
+        watchlist_count=len(items),
+        candidate_count=len(candidates),
+        trade_actions=len(unexecuted),
+        risk_items=risk_items[:8],
+        next_day_focus=focus[:6],
+    )
+
+
+@app.get("/notifications")
+def notifications() -> list[DisciplineNotification]:
+    created_at = datetime.now().isoformat(timespec="seconds")
+    output: list[DisciplineNotification] = []
+    cash_balance = _cash_balance()
+    cash_target = _cash_target()
+    if cash_balance < cash_target:
+        output.append(DisciplineNotification(
+            id="cash-cushion",
+            title="现金垫不足",
+            detail=f"当前现金 {cash_balance:.2f}，低于 8% 现金垫 {cash_target:.2f}，新增买入应先暂停。",
+            severity="risk",
+            created_at=created_at,
+        ))
+    if SCREENING_REFRESHING:
+        output.append(DisciplineNotification(
+            id="candidate-refresh",
+            title="候选股正在刷新",
+            detail="候选股真实扫描仍在后台运行，页面先显示最后一次真实缓存。",
+            severity="info",
+            created_at=created_at,
+        ))
+    for item in watchlist():
+        if item.signal == "RISK":
+            output.append(DisciplineNotification(
+                id=f"risk-{item.ticker}",
+                title=f"{item.ticker} 风险信号",
+                detail=item.signal_reason or item.watch_reason or "股票池触发风险状态。",
+                severity="risk",
+                created_at=created_at,
+            ))
+        elif item.data_status in {"缓存", "昨收", "样例", "无行情"}:
+            output.append(DisciplineNotification(
+                id=f"data-{item.ticker}",
+                title=f"{item.ticker} 行情非实时",
+                detail=f"当前数据状态为 {item.data_status}，只适合观察，不生成立即买入。",
+                severity="warn",
+                created_at=created_at,
+            ))
+    if not output:
+        output.append(DisciplineNotification(
+            id="discipline-clear",
+            title="纪律检查通过",
+            detail="现金垫、行情状态和股票池风险信号未触发强提醒。",
+            severity="info",
+            created_at=created_at,
+        ))
+    return output[:10]
+
+
+def _asset_summary(name: str, path: Path, pattern: str) -> DataAssetSummary:
+    files = sorted(path.glob(pattern), reverse=True) if path.exists() else []
+    latest = files[0].name if files else ""
+    return DataAssetSummary(
+        name=name,
+        count=len(files),
+        latest=latest,
+        status="有本地数据" if files else "暂无本地数据",
+    )
+
+
 @app.get("/signals")
 def signals() -> list[Signal]:
     return [generate_signal(item) for item in dynamic_watchlist(WATCHLIST, HOLDINGS, MODEL_VALIDATION_BY_TICKER)]
@@ -1175,6 +1645,34 @@ def resume_automation() -> dict[str, bool]:
 @app.get("/orders")
 def orders() -> list[TradeOrder]:
     return ORDERS
+
+
+@app.delete("/manual-executions/{order_id}")
+def delete_manual_execution(order_id: str) -> dict[str, str]:
+    order = next((item for item in ORDERS if item.id == order_id), None)
+    if not order:
+        raise HTTPException(status_code=404, detail="manual execution not found")
+    if order.order_type != "MANUAL" or not order.id.startswith("manual_"):
+        raise HTTPException(status_code=400, detail="only manual execution records can be deleted")
+    ORDERS.remove(order)
+    holding_note = _rollback_manual_execution_from_holdings(order)
+    event_id = f"event_{order.id}"
+    before = len(EVENTS)
+    EVENTS[:] = [
+        event for event in EVENTS
+        if event.id != event_id and not (
+            event.title == "线下交易已回填"
+            and event.ticker == order.ticker
+            and event.created_at == order.created_at
+            and f"{order.qty} 股" in event.reason
+        )
+    ]
+    _save_local_state()
+    return {
+        "deleted": order.id,
+        "holding_note": holding_note,
+        "events_removed": str(before - len(EVENTS)),
+    }
 
 
 @app.post("/orders")
@@ -1214,8 +1712,9 @@ def preview_order(request: OrderRequest, target: str = Query(default="")):
 @app.post("/manual-executions")
 def create_manual_execution(request: ManualExecutionRequest) -> TradeOrder:
     ticker = request.ticker.strip().upper()
+    order_id = f"manual_{request.broker}_{len(ORDERS) + 1}"
     order = TradeOrder(
-        id=f"manual_{request.broker}_{len(ORDERS) + 1}",
+        id=order_id,
         broker=request.broker,
         ticker=ticker,
         side=request.side,
@@ -1230,7 +1729,7 @@ def create_manual_execution(request: ManualExecutionRequest) -> TradeOrder:
     EVENTS.insert(
         0,
         DisciplineEvent(
-            id=f"manual_event_{len(EVENTS) + 1}",
+            id=f"event_{order.id}",
             ticker=ticker,
             title="线下交易已回填",
             reason=f"{request.broker} {request.side.value} {request.qty} 股，成交价 {request.price:.2f}。",
@@ -1292,6 +1791,50 @@ def _apply_manual_execution_to_holdings(request: ManualExecutionRequest, ticker:
     existing.updated_at = request.executed_at
     _refresh_holding_quote(existing)
     return "已扣减本地持仓数量。"
+
+
+def _rollback_manual_execution_from_holdings(order: TradeOrder) -> str:
+    broker = order.broker if order.broker in {"za-bank", "usmart", "ibkr"} else "manual"
+    qty = float(order.qty)
+    price = float(order.limit_price)
+    notional = round(qty * price, 2)
+    if order.side == "BUY":
+        ACCOUNT_CASH_BALANCES[broker] = round(ACCOUNT_CASH_BALANCES.get(broker, 0.0) + notional, 2)
+        existing = next((item for item in HOLDINGS if item.broker == broker and item.ticker == order.ticker), None)
+        if not existing:
+            return "已删除线下买入记录；未找到对应持仓，现金已回滚。"
+        remaining_qty = round(existing.qty - qty, 8)
+        if remaining_qty <= 0:
+            HOLDINGS.remove(existing)
+            return "已删除线下买入记录，并移除对应本地持仓。"
+        previous_cost = existing.avg_cost
+        if existing.qty > qty:
+            previous_cost = max((existing.avg_cost * existing.qty - price * qty) / remaining_qty, 0)
+        existing.qty = remaining_qty
+        existing.avg_cost = round(previous_cost, 4)
+        existing.market_value = round(existing.qty * existing.market_price, 2)
+        existing.pnl = round((existing.market_price - existing.avg_cost) * existing.qty, 2)
+        return "已删除线下买入记录，并反向扣减本地持仓。"
+    ACCOUNT_CASH_BALANCES[broker] = round(ACCOUNT_CASH_BALANCES.get(broker, 0.0) - notional, 2)
+    existing = next((item for item in HOLDINGS if item.broker == broker and item.ticker == order.ticker), None)
+    if existing:
+        existing.qty = round(existing.qty + qty, 8)
+        existing.market_value = round(existing.qty * existing.market_price, 2)
+        existing.pnl = round((existing.market_price - existing.avg_cost) * existing.qty, 2)
+        return "已删除线下卖出记录，并反向恢复本地持仓数量。"
+    HOLDINGS.append(
+        Holding(
+            broker=broker,
+            ticker=order.ticker,
+            qty=qty,
+            avg_cost=price,
+            market_price=price,
+            market_value=round(qty * price, 2),
+            pnl=0,
+            updated_at=order.created_at,
+        )
+    )
+    return "已删除线下卖出记录，并按成交价恢复一条本地持仓。"
 
 
 def _refresh_holding_quote(holding: Holding) -> bool:
@@ -1445,6 +1988,10 @@ def _account_total() -> float:
 
 def _cash_balance() -> float:
     return round(sum(ACCOUNT_CASH_BALANCES.values()), 2)
+
+
+def _cash_target() -> float:
+    return round(_account_total() * 0.08, 2)
 
 
 def _dashboard_pnl() -> float:

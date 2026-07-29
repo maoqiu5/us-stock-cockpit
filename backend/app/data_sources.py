@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .models import DataSourceStatus, Holding, MarketQuote, WatchlistItem
 from .historical_prices import _yahoo_intraday_quote, is_us_market_open, previous_close_quotes
-from .market_cache import latest_cached_quotes, save_quotes
+from .market_cache import cached_daily_closes, latest_cached_quotes, save_quotes
 from .seed import WATCHLIST
 
 
@@ -120,7 +120,10 @@ def dynamic_watchlist(items: list[WatchlistItem], holdings: list[Holding] | None
 
 def _dynamic_watchlist_item(item: WatchlistItem, quote: MarketQuote | None, fundamentals: dict[str, float | str], holding: dict[str, float] | None = None, validation: dict[str, float | str] | None = None) -> WatchlistItem:
     pct_change = quote.pct_change if quote else 0
-    trend = _trend_from_change(pct_change)
+    technicals = _historical_technicals(item.ticker, quote)
+    trend = _trend_from_technicals(pct_change, technicals)
+    data_status = _data_status(quote)
+    tradable_quote = data_status in {"实时", "准实时"}
     fallback = _price_adjusted_fallback_metrics(item, quote)
     pe = _metric_value(fundamentals.get("pe"), fallback["pe"])
     peg = _metric_value(fundamentals.get("peg"), fallback["peg"])
@@ -132,11 +135,14 @@ def _dynamic_watchlist_item(item: WatchlistItem, quote: MarketQuote | None, fund
     model_score = int(_metric_value(validation.get("score") if has_model_validation else None, item.model_score))
     model_reason = str((validation or {}).get("reason") or item.model_reason or "尚未验证模型")
     model_pass = not has_model_validation or model_score >= 55
-    eligible = pe <= 40 and peg <= 2 and roi >= 15 and growth >= 8 and trend in {"上行", "横盘"} and model_pass
+    watch = _watch_assessment(item, quote, trend, model_score, has_model_validation, holding_pnl_pct, holding_weight, data_status, technicals)
+    eligible = pe <= 40 and peg <= 2 and roi >= 15 and growth >= 8 and trend in {"上行", "横盘"} and model_pass and tradable_quote and watch["score"] >= 58
     holding_risk = holding is not None and (holding_pnl_pct <= -15 or holding_weight >= 12)
     model_risk = has_model_validation and model_score < 40
-    signal = "RISK" if holding_risk or model_risk or trend == "过热" or pe > 45 or peg > 2.6 or pct_change < -5 else ("BUY" if eligible else "WATCH")
-    signal_reason = _signal_reason(signal, pe, peg, roi, growth, trend, pct_change, holding_pnl_pct, holding_weight, holding is not None, model_score, model_reason, has_model_validation)
+    stale_risk = data_status in {"样例", "无行情"}
+    signal = "RISK" if holding_risk or model_risk or stale_risk or trend == "过热" or pe > 45 or peg > 2.6 or pct_change < -5 else ("BUY" if eligible else "WATCH")
+    signal_reason = _signal_reason(signal, pe, peg, roi, growth, trend, pct_change, holding_pnl_pct, holding_weight, holding is not None, model_score, model_reason, has_model_validation, data_status)
+    lines = _price_discipline_lines(quote.price if quote else 0, signal, holding, holding_pnl_pct)
     return item.model_copy(update={
         "name": str(fundamentals.get("name") or item.name),
         "sector": str(fundamentals.get("sector") or item.sector),
@@ -150,6 +156,26 @@ def _dynamic_watchlist_item(item: WatchlistItem, quote: MarketQuote | None, fund
         "signal_reason": signal_reason,
         "model_score": model_score,
         "model_reason": model_reason,
+        "watch_score": watch["score"],
+        "watch_label": str(watch["label"]),
+        "watch_reason": str(watch["reason"]),
+        "entry_low_price": lines["entry_low"],
+        "entry_high_price": lines["entry_high"],
+        "chase_limit_price": lines["chase_limit"],
+        "stop_loss_price": lines["stop_loss"],
+        "take_profit_price": lines["take_profit"],
+        "max_loss_amount": lines["max_loss"],
+        "quote_source": quote.source if quote else "",
+        "quote_updated_at": quote.updated_at if quote else "",
+        "data_status": data_status,
+        "volume_score": watch["volume_score"],
+        "ma5": technicals["ma5"],
+        "ma20": technicals["ma20"],
+        "distance_to_20d_high_pct": technicals["distance_to_20d_high_pct"],
+        "distance_to_20d_low_pct": technicals["distance_to_20d_low_pct"],
+        "atr20": technicals["atr20"],
+        "relative_volume": technicals["relative_volume"],
+        "vwap_hint": technicals["vwap_hint"],
     })
 
 
@@ -165,8 +191,10 @@ def _holding_context(holdings: list[Holding]) -> dict[str, dict[str, float]]:
     return context
 
 
-def _signal_reason(signal: str, pe: float, peg: float, roi: float, growth: float, trend: str, pct_change: float, holding_pnl_pct: float, holding_weight: float, has_holding: bool, model_score: int, model_reason: str, has_model_validation: bool) -> str:
+def _signal_reason(signal: str, pe: float, peg: float, roi: float, growth: float, trend: str, pct_change: float, holding_pnl_pct: float, holding_weight: float, has_holding: bool, model_score: int, model_reason: str, has_model_validation: bool, data_status: str = "无行情") -> str:
     reasons: list[str] = []
+    if data_status in {"缓存", "昨收", "样例", "无行情"}:
+        reasons.append(f"行情状态 {data_status}，不生成立即买入")
     if has_holding and holding_pnl_pct <= -15:
         reasons.append(f"持仓亏损 {holding_pnl_pct:.2f}%")
     if has_holding and holding_weight >= 12:
@@ -192,6 +220,201 @@ def _signal_reason(signal: str, pe: float, peg: float, roi: float, growth: float
     if signal == "WATCH" and not reasons:
         reasons.append(f"未满足 BUY 全部条件；{model_reason}")
     return "；".join(reasons[:4])
+
+
+def _data_status(quote: MarketQuote | None) -> str:
+    if not quote:
+        return "无行情"
+    source = quote.source.lower()
+    if "sample" in source:
+        return "样例"
+    if "local-cache" in source or "cache" in source:
+        return "缓存"
+    if "昨收" in quote.source or "previous" in source:
+        return "昨收"
+    return "实时" if quote.delay_seconds <= 60 else "准实时"
+
+
+def _historical_technicals(ticker: str, quote: MarketQuote | None) -> dict[str, float]:
+    blank = {
+        "ma5": 0.0,
+        "ma20": 0.0,
+        "distance_to_20d_high_pct": 0.0,
+        "distance_to_20d_low_pct": 0.0,
+        "atr20": 0.0,
+        "relative_volume": 0.0,
+        "vwap_hint": 0.0,
+    }
+    price = quote.price if quote and quote.price > 0 else 0
+    end = datetime.now().date()
+    start = end - timedelta(days=45)
+    rows = cached_daily_closes(ticker, start.isoformat(), end.isoformat())
+    closes = [close for _, close in rows if close and close > 0]
+    if price > 0:
+        closes = closes + [price]
+    if len(closes) < 5:
+        return blank
+    recent20 = closes[-20:]
+    ma5 = sum(closes[-5:]) / 5
+    ma20 = sum(recent20) / len(recent20) if recent20 else 0
+    high20 = max(recent20) if recent20 else 0
+    low20 = min(recent20) if recent20 else 0
+    returns = [abs(closes[index] / closes[index - 1] - 1) for index in range(1, len(closes)) if closes[index - 1] > 0]
+    recent_returns = returns[-20:]
+    atr20 = (sum(recent_returns) / len(recent_returns) * price) if recent_returns and price > 0 else 0
+    return {
+        "ma5": round(ma5, 2),
+        "ma20": round(ma20, 2),
+        "distance_to_20d_high_pct": round((price / high20 - 1) * 100, 2) if price > 0 and high20 > 0 else 0.0,
+        "distance_to_20d_low_pct": round((price / low20 - 1) * 100, 2) if price > 0 and low20 > 0 else 0.0,
+        "atr20": round(atr20, 2),
+        "relative_volume": 0.0,
+        "vwap_hint": 0.0,
+    }
+
+
+def _trend_from_technicals(pct_change: float, technicals: dict[str, float]) -> str:
+    ma5 = technicals.get("ma5", 0)
+    ma20 = technicals.get("ma20", 0)
+    distance_high = technicals.get("distance_to_20d_high_pct", 0)
+    distance_low = technicals.get("distance_to_20d_low_pct", 0)
+    if ma5 and ma20:
+        if ma5 > ma20 * 1.01 and pct_change >= -1:
+            return "上行"
+        if ma5 < ma20 * 0.99 and pct_change <= 1:
+            return "下行"
+        if distance_high >= 0 and pct_change > TREND_OVERHEATED_PCT:
+            return "过热"
+        if distance_low and distance_low <= 3 and pct_change < 0:
+            return "下行"
+        return "横盘"
+    return _trend_from_change(pct_change)
+
+
+def _watch_assessment(item: WatchlistItem, quote: MarketQuote | None, trend: str, model_score: int, has_model_validation: bool, holding_pnl_pct: float, holding_weight: float, data_status: str, technicals: dict[str, float] | None = None) -> dict[str, int | str]:
+    if not quote or quote.price <= 0:
+        return {"score": 0, "label": "无行情", "reason": "缺少真实行情，暂不研判。", "volume_score": 0}
+    technicals = technicals or {}
+    volume_score = _volume_score(quote.volume, quote.price)
+    score = 50
+    if quote.pct_change >= 2:
+        score += 14
+    elif quote.pct_change >= 0.5:
+        score += 7
+    elif quote.pct_change <= -5:
+        score -= 24
+    elif quote.pct_change <= -2:
+        score -= 12
+    if trend == "过热":
+        score -= 10
+    elif trend == "上行":
+        score += 8
+    elif trend == "下行":
+        score -= 10
+    score += round((volume_score - 50) * 0.25)
+    if has_model_validation:
+        score += round((model_score - 55) * 0.35)
+    ma5 = float(technicals.get("ma5") or 0)
+    ma20 = float(technicals.get("ma20") or 0)
+    distance_high = float(technicals.get("distance_to_20d_high_pct") or 0)
+    distance_low = float(technicals.get("distance_to_20d_low_pct") or 0)
+    if ma5 and ma20:
+        if quote.price >= ma5 >= ma20:
+            score += 10
+        elif quote.price < ma20:
+            score -= 10
+        if distance_high >= -3:
+            score += 5
+        if 0 < distance_low <= 3:
+            score -= 8
+    if holding_pnl_pct <= -15:
+        score -= 12
+    if holding_weight >= 12:
+        score -= 8
+    if data_status in {"缓存", "昨收"}:
+        score = min(score, 54)
+    if data_status in {"样例", "无行情"}:
+        score = min(score, 30)
+    score = max(0, min(100, score))
+    if data_status in {"缓存", "昨收"}:
+        label = "缓存观察"
+    elif data_status in {"样例", "无行情"}:
+        label = "数据不足"
+    elif quote.pct_change > 5:
+        label = "过热冲高"
+    elif quote.pct_change <= -5:
+        label = "破位下行"
+    elif score >= 72:
+        label = "强势上行"
+    elif score >= 58:
+        label = "可跟踪加仓"
+    elif score >= 42:
+        label = "横盘等待"
+    else:
+        label = "弱势回避"
+    reason_bits = [
+        f"{data_status}行情 {quote.updated_at}",
+        f"涨跌 {quote.pct_change:+.2f}%",
+        f"成交确认 {volume_score}",
+    ]
+    if ma5 and ma20:
+        reason_bits.append(f"MA5/20 {ma5:.2f}/{ma20:.2f}")
+    if distance_high or distance_low:
+        reason_bits.append(f"20日区间 高{distance_high:+.1f}% 低{distance_low:+.1f}%")
+    if has_model_validation:
+        reason_bits.append(f"模型分 {model_score}")
+    if holding_pnl_pct:
+        reason_bits.append(f"持仓盈亏 {holding_pnl_pct:+.1f}%")
+    return {"score": score, "label": label, "reason": "；".join(reason_bits[:5]), "volume_score": volume_score}
+
+
+def _volume_score(volume: float, price: float) -> int:
+    dollar_volume = max(volume, 0) * max(price, 0)
+    if dollar_volume >= 50_000_000:
+        return 100
+    if dollar_volume >= 15_000_000:
+        return 82
+    if dollar_volume >= 5_000_000:
+        return 65
+    if dollar_volume >= 1_000_000:
+        return 48
+    if dollar_volume > 0:
+        return 30
+    return 20
+
+
+def _price_discipline_lines(price: float, signal: str, holding: dict[str, float] | None, holding_pnl_pct: float) -> dict[str, float]:
+    if price <= 0:
+        return {"entry_low": 0.0, "entry_high": 0.0, "chase_limit": 0.0, "stop_loss": 0.0, "take_profit": 0.0, "max_loss": 0.0}
+    cost = float(holding["cost"]) / max(float(holding["value"]) / price, 0.0001) if holding and float(holding["value"]) > 0 else price
+    if signal == "BUY":
+        stop_loss = min(price * 0.92, price - max(price * 0.06, 0.08))
+        take_profit = price * 1.15
+        entry_low = price * 0.99
+        entry_high = price * 1.005
+        chase_limit = price * 1.025
+    elif signal == "RISK":
+        stop_loss = min(price * 0.95, cost * 0.85) if holding else price * 0.95
+        take_profit = price * 1.08
+        entry_low = 0.0
+        entry_high = 0.0
+        chase_limit = 0.0
+    else:
+        stop_loss = price * 0.90
+        take_profit = price * 1.12
+        entry_low = price * 0.985
+        entry_high = price * 1.0
+        chase_limit = price * 1.015
+    account_total = float(holding["account_total"]) if holding else 0.0
+    risk_budget = account_total * (0.003 if holding_pnl_pct < -10 else 0.005)
+    return {
+        "entry_low": round(entry_low, 2),
+        "entry_high": round(entry_high, 2),
+        "chase_limit": round(chase_limit, 2),
+        "stop_loss": round(stop_loss, 2),
+        "take_profit": round(take_profit, 2),
+        "max_loss": round(risk_budget, 2),
+    }
 
 
 def _fundamentals_for_ticker(ticker: str, live_price: float | None) -> dict[str, float | str]:

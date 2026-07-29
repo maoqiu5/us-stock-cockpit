@@ -1,6 +1,6 @@
 # 美股驾驶舱 AI 接力上下文
 
-更新时间：2026-07-17  
+更新时间：2026-07-21  
 工作区：`/Users/brian/Documents/美股`
 
 这份文档给新的 AI 对话或接手开发者使用。目标是打开后立刻理解本项目、当前进度、用户正在做什么、下一步怎么继续。
@@ -18,7 +18,8 @@
 - 数据既要能上云，也要能在工作区保留本地副本。
 - 后续本地改代码后可以同步发布到云端。
 - 不能使用模拟数据；数据缺失宁愿空着或显示数据质量不足。
-- 黄金分析板块保留，不要破坏。
+- 美股前台已删除黄金盯盘；后端黄金接口和历史记录暂时保留，不能误删。
+- 每次功能、数据、接口、部署或策略逻辑更新，都必须追加 `CHANGELOG.md`；影响产品边界、路线图或数据原则时，再同步更新 `docs/PRD.md`。
 
 ## 3. 当前购买进度
 
@@ -161,6 +162,8 @@ SQLite 持久层：
 项目总交接：
 
 - `docs/PROJECT_HANDOFF.md`
+- `docs/PRD.md`
+- `CHANGELOG.md`
 
 当前接力快照：
 
@@ -197,31 +200,19 @@ ZA Bank：
 
 ## 7. 关键环境变量
 
-本地开发：
+本地开发和生产部署都只在环境变量或 VPS `.env.production` 中保存真实值。文档只记录变量名和用途：
 
-```dotenv
-NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000
-NEXT_PUBLIC_BASE_PATH=
-APP_PASSWORD=
-FMP_API_KEY=
-BROKER_MODE=paper
-ENABLE_LIVE_TRADING=false
-```
-
-生产部署：
-
-```dotenv
-APP_DOMAIN=stock.example.com
-PUBLIC_URL=https://stock.example.com
-TLS_EMAIL=you@example.com
-APP_PASSWORD=强密码
-FMP_API_KEY=用户的FMPKey
-DATABASE_PATH=/app/data/usstock/usstock_cockpit.db
-LOCAL_STATE_PATH=/app/data/usstock/local_state.json
-MARKET_CACHE_DIR=/app/data/usstock/market_cache
-BROKER_MODE=paper
-ENABLE_LIVE_TRADING=false
-```
+| 变量名 | 用途 |
+| --- | --- |
+| `NEXT_PUBLIC_API_BASE` | 本地前端访问后端的基础地址。 |
+| `NEXT_PUBLIC_BASE_PATH` | 前端路径前缀。 |
+| `APP_PASSWORD` | 历史项目内访问密码，门户 SSO 完成后逐步废弃。 |
+| `FMP_API_KEY` | FMP 行情和基本面 API Key。 |
+| `DATABASE_PATH` | SQLite 数据库路径。 |
+| `LOCAL_STATE_PATH` | JSON 状态镜像路径。 |
+| `MARKET_CACHE_DIR` | 行情和候选股缓存目录。 |
+| `BROKER_MODE` | 券商模式，当前以 paper/manual 为主。 |
+| `ENABLE_LIVE_TRADING` | 是否允许真实网络下单，当前默认关闭。 |
 
 注意：
 
@@ -265,8 +256,10 @@ scripts/backup_data.sh
 后端：
 
 ```bash
-FMP_API_KEY='不要写入文件的真实key' .venv/bin/python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+.venv/bin/python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 ```
+
+如需启用 FMP，在启动进程前通过当前 shell 环境传入 `FMP_API_KEY`，不要写入代码、文档或提交记录。
 
 前端：
 

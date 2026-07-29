@@ -171,6 +171,11 @@ class AccountBalance(BaseModel):
     source: str
 
 
+class AccountCashUpdateRequest(BaseModel):
+    available_cash: float = Field(ge=0)
+    note: str = ""
+
+
 class PreviousCloseImportResult(BaseModel):
     as_of: str
     source: str
@@ -285,6 +290,26 @@ class WatchlistItem(BaseModel):
     signal_reason: str = ""
     model_score: int = 0
     model_reason: str = ""
+    watch_score: int = 0
+    watch_label: str = ""
+    watch_reason: str = ""
+    entry_low_price: float = 0
+    entry_high_price: float = 0
+    chase_limit_price: float = 0
+    stop_loss_price: float = 0
+    take_profit_price: float = 0
+    max_loss_amount: float = 0
+    quote_source: str = ""
+    quote_updated_at: str = ""
+    data_status: str = "无行情"
+    volume_score: int = 0
+    ma5: float = 0
+    ma20: float = 0
+    distance_to_20d_high_pct: float = 0
+    distance_to_20d_low_pct: float = 0
+    atr20: float = 0
+    relative_volume: float = 0
+    vwap_hint: float = 0
 
 
 class AddWatchlistRequest(BaseModel):
@@ -319,6 +344,9 @@ class TradePlanItem(BaseModel):
     ticker: str
     name: str
     broker: str
+    account_name: str = ""
+    account_total: float = 0
+    available_cash: float = 0
     signal: str
     model_score: int
     action: str
@@ -332,6 +360,10 @@ class TradePlanItem(BaseModel):
     suggested_qty: int
     stop_loss_price: float
     take_profit_price: float
+    entry_low_price: float = 0
+    entry_high_price: float = 0
+    chase_limit_price: float = 0
+    max_loss_amount: float = 0
     confidence: float
     reason: str
     blockers: list[str]
@@ -349,10 +381,18 @@ class CandidateStock(BaseModel):
     data_quality: float = 0
     signal: str = "WATCH"
     reference_source: str = ""
+    liquidity_score: int = 0
+    dollar_volume: float = 0
+    market_cap: float = 0
+    exchange: str = ""
+    source_updated_at: str = ""
+    data_status: str = "真实扫描"
 
 
 class AllocationSuggestion(BaseModel):
     ticker: str
+    broker: str = ""
+    account_name: str = ""
     current_weight: float
     target_weight: float
     action: str
@@ -385,6 +425,31 @@ class ModelValidationItem(BaseModel):
     long_return: float = 0
     long_drawdown: float = 0
     tuning_note: str
+
+
+class DataAssetSummary(BaseModel):
+    name: str
+    count: int
+    latest: str = ""
+    status: str
+
+
+class PostMarketReview(BaseModel):
+    as_of: str
+    snapshot_source: str
+    watchlist_count: int
+    candidate_count: int
+    trade_actions: int
+    risk_items: list[str]
+    next_day_focus: list[str]
+
+
+class DisciplineNotification(BaseModel):
+    id: str
+    title: str
+    detail: str
+    severity: Literal["info", "warn", "risk"]
+    created_at: str
 
 
 class DisciplineEvent(BaseModel):

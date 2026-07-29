@@ -17,9 +17,9 @@
 
 公网部署必须设置：
 
-- `APP_PASSWORD`：网页访问密码。后端启用后，所有业务接口都需要密码。
-- `FMP_API_KEY`：行情 API key，只写到服务器环境变量或 `.env.production`，不要提交到 Git。
-- `ENABLE_LIVE_TRADING=false`：保持实盘下单关闭，当前平台只做分析和手工交易记录。
+- `APP_PASSWORD`：历史项目内网页访问密码。接入 BrianHub 门户 SSO 后应逐步废弃项目内独立密码。
+- `FMP_API_KEY`：行情 API Key，只写到服务器环境变量或 `.env.production`，不要提交到 Git。
+- `ENABLE_LIVE_TRADING`：实盘下单开关。当前平台只做分析和手工交易记录，默认保持关闭。
 
 ## 服务器准备
 
@@ -46,15 +46,18 @@ cd us-stock-cockpit
 cp .env.production.example .env.production
 ```
 
-填写：
+填写变量名和用途，真实值只保存在 VPS，不写入文档：
 
-```dotenv
-PUBLIC_URL=https://brianhub.net
-APP_PASSWORD=一个强密码
-FMP_API_KEY=你的FMPKey
-BROKER_MODE=paper
-ENABLE_LIVE_TRADING=false
-```
+| 变量名 | 用途 |
+| --- | --- |
+| `PUBLIC_URL` | 公网基础地址。 |
+| `APP_PASSWORD` | 历史项目内访问密码，门户 SSO 完成后逐步废弃。 |
+| `FMP_API_KEY` | FMP 行情和基本面 API Key。 |
+| `BROKER_MODE` | 券商模式，当前以 paper/manual 为主。 |
+| `ENABLE_LIVE_TRADING` | 是否允许真实网络下单，当前默认关闭。 |
+| `DATABASE_PATH` | SQLite 数据库路径。 |
+| `LOCAL_STATE_PATH` | JSON 状态镜像路径。 |
+| `MARKET_CACHE_DIR` | 行情和候选股缓存目录。 |
 
 ## 数据库与本地数据
 
@@ -115,7 +118,7 @@ curl https://brianhub.net/usstock/api/health
 https://brianhub.net/usstock
 ```
 
-第一次进入会要求输入 `APP_PASSWORD`。
+当前 BrianHub 统一门户已作为长期登录入口。若项目内历史密码仍存在，只作为兼容层保留；后续应以门户 SSO 为准。
 
 ## 更新代码
 
@@ -152,8 +155,25 @@ scripts/backup_data.sh
 服务器上可以加 crontab：
 
 ```cron
-10 6 * * * cd /home/你的用户/apps/us-stock-cockpit && scripts/backup_data.sh >> data/usstock/backups/backup.log 2>&1
+10 6 * * * cd /root/apps/us-stock-cockpit && scripts/backup_data.sh >> data/usstock/backups/backup.log 2>&1
 ```
+
+## 回滚
+
+回滚前先确认最近备份：
+
+```text
+/root/apps/us-stock-cockpit/data/usstock/backups/
+```
+
+通用回滚步骤：
+
+1. 停止或重建当前 backend/frontend 容器。
+2. 恢复上一版代码文件或镜像。
+3. 如涉及数据变更，恢复 `data/usstock/` 下的数据库和状态文件备份。
+4. 重启业务容器。
+5. 验证 `/usstock`、`/usstock/api/health`、`/usstock/api/watchlist` 和关键持仓/候选股接口。
+6. 将回滚原因、影响范围和验证结果写入 `docs/CHANGELOG.md` 或 `docs/reports/`。
 
 ## 常见问题
 
@@ -165,11 +185,11 @@ scripts/backup_data.sh
 docker compose --env-file .env.production -f docker-compose.prod.yml logs -f backend
 ```
 
-检查 `.env.production` 是否设置了 `FMP_API_KEY` 和 `APP_PASSWORD`。
+检查 `.env.production` 是否包含行情数据源、历史兼容密码和数据目录相关变量。不要把真实值复制到文档或对话里。
 
 ### 密码一直不通过
 
-确认浏览器输入的是服务器 `.env.production` 中的 `APP_PASSWORD`。修改密码后重启：
+如果仍使用项目内历史密码，确认浏览器输入的是服务器 `.env.production` 中的密码。修改密码后重启：
 
 ```bash
 docker compose --env-file .env.production -f docker-compose.prod.yml restart backend
@@ -188,10 +208,4 @@ volumes:
   - ./data:/app/data
 ```
 
-并确认服务器项目目录下的 `data/` 可写，且环境变量包含：
-
-```dotenv
-DATABASE_PATH=/app/data/usstock/usstock_cockpit.db
-LOCAL_STATE_PATH=/app/data/usstock/local_state.json
-MARKET_CACHE_DIR=/app/data/usstock/market_cache
-```
+并确认服务器项目目录下的 `data/` 可写，且环境变量包含数据库路径、状态镜像路径和行情缓存目录。真实路径值以 VPS `.env.production` 和 `docker-compose.prod.yml` 为准。

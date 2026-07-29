@@ -12,6 +12,8 @@
 - 只使用真实数据做分析和回测；数据缺失时宁愿为空、跳过或返回错误，不使用模拟数据补齐。
 - 支持人工或券商 API 前的交易纪律校验，避免绕过风控。
 
+维护规则：每次功能、数据、接口、部署、文档或策略逻辑更新，都必须追加 `CHANGELOG.md` 版本记录。`docs/PRD.md` 只保留产品原则、功能边界、路线图和最近版本摘要；影响这些内容时再同步更新 PRD。新对话接手时应先阅读 `docs/PRD.md`、`CHANGELOG.md`、本交接文档和 `docs/AI_RESUME_CONTEXT.md`。
+
 用户偏好是“实用驾驶舱”，不是营销落地页。界面应紧凑、可扫描、便于每天重复查看，不要使用过多解释性文案。
 
 ## 2. 技术栈
@@ -104,7 +106,7 @@ npm run dev
    - 直接回测接口应该报错或无结果。
    - 模型验证应该把样本记为缺失。
    - UI 可以显示数据质量不足，而不是假装有结论。
-5. 候选股必须是真实搜寻结果，当前规则要求股价低于 10 美元，并可参考第三方荐股/筛选平台。
+5. 候选股必须是真实搜寻结果，当前不限制 10 美元以下，但仍需要流动性、市值、交易所和普通股类型过滤，并可参考第三方荐股/筛选平台。
 
 ## 6. 当前数据源
 
@@ -125,7 +127,7 @@ npm run dev
 - FMP company screener。
 - FMP v3 stock-screener。
 - FMP stock-list。
-- Finviz 低价股 screener 作为第三方参考和 fallback。
+- Finviz screener 作为第三方参考和 fallback。
 
 历史价格：
 
@@ -295,15 +297,15 @@ npm run dev
 当前要求：
 
 - 真实搜寻，不写死固定股票。
-- 只纳入 10 美元以下股票。
+- 不限制 10 美元以下；仅保留最低价格、成交量、成交额、市值、交易所和普通股类型约束。
 - 可从第三方荐股/筛选平台作为参考。
 - 候选股也要进入动态股票池计算和模型验证。
 
 候选股流程：
 
-1. `_low_price_candidate_universe()` 获取低价股原始池。
+1. `_low_price_candidate_universe()` 获取候选股原始池；函数名沿用旧名，但生产规则已取消 10 美元上限。
 2. 依次尝试 FMP screener、FMP v3 screener、FMP stock-list。
-3. 如果 FMP 不可用或不足，尝试 Finviz 低价股 screener。
+3. 如果 FMP 不可用或不足，尝试 Finviz screener。
 4. 原始抓取结果保存到 `data/usstock/market_cache/screening/`。
 5. 转为 `WatchlistItem` 后调用 `dynamic_watchlist()`。
 6. 用 `_candidate_model_summary()` 计算模型验证摘要。
@@ -440,7 +442,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/codex-pycache .venv/bin/python -m py_compile ba
 7. 调用 `GET /market/quotes`，确认 `data/usstock/market_cache/quotes/` 写入当天文件。
 8. 调用 `GET /watchlist`，确认股票池按实时价格重算。
 9. 调用 `GET /models/validation`，确认真实历史数据不足的样本被标为缺失，而不是模拟补齐。
-10. 调用 `GET /screening/candidates`，确认候选股小于 10 美元且写入 `data/usstock/market_cache/screening/`。
+10. 调用 `GET /screening/candidates`，确认候选股来自真实扫描或真实缓存，且写入 `data/usstock/market_cache/screening/`。
 
 ## 18. 已知限制和后续优化
 
