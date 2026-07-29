@@ -26,8 +26,10 @@ secrets/
 *.sqlite-shm
 *.sqlite-wal
 *.bak
+*.bak-*
 *.backup-*
 *.pre-*
+*.legacy-*
 __pycache__/
 .pytest_cache/
 data/
